@@ -1140,6 +1140,34 @@ impl IntegerType {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RealType {
+    F32,
+    F64,
+    Unbounded,
+}
+
+impl ToTokens for RealType {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        match self {
+            RealType::F32 => tokens.append_all(quote!(f32)),
+            RealType::F64 => tokens.append_all(quote!(f64)),
+            RealType::Unbounded => tokens.append_all(quote!(Real)),
+        }
+    }
+}
+
+impl RealType {
+    pub fn max_restrictive(self, rhs: RealType) -> RealType {
+        match (self, rhs) {
+            (x, y) if x == y => x,
+            (RealType::F32, _) | (_, RealType::F32) => RealType::F32,
+            (RealType::F64, _) | (_, RealType::F64) => RealType::F64,
+            _ => RealType::Unbounded,
+        }
+    }
+}
+
 /// The possible types of an ASN1 value.
 #[cfg_attr(test, derive(EnumDebug))]
 #[cfg_attr(not(test), derive(Debug))]

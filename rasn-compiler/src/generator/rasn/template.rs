@@ -64,6 +64,37 @@ pub fn integer_template(
     }
 }
 
+pub fn real_template(
+    comments: TokenStream,
+    name: TokenStream,
+    annotations: TokenStream,
+    real_type: TokenStream,
+) -> TokenStream {
+    quote! {
+        #comments
+        // #annotations
+        #[derive(AsnType, Debug, Clone, Copy, Decode, Encode, PartialEq, PartialOrd)]
+        #[repr(transparent)]
+        pub struct #name (pub #real_type);
+
+        impl core::ops::Deref for #name {
+            type Target = #real_type;
+
+            fn deref(&self) -> &Self::Target {
+                &self.0
+            }
+        }
+
+        impl Eq for #name {}
+
+        impl core::hash::Hash for #name {
+            fn hash<H>(&self, state: &mut H) where H: core::hash::Hasher {
+                state.write(&self.0.to_ne_bytes())
+            }
+        }
+    }
+}
+
 pub fn generalized_time_template(
     comments: TokenStream,
     name: TokenStream,

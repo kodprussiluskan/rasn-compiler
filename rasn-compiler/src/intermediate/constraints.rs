@@ -5,7 +5,7 @@ use std::error::Error;
 use super::{
     error::{GrammarError, GrammarErrorType},
     information_object::{InformationObjectFields, ObjectSet},
-    ASN1Type, ASN1Value, IntegerType,
+    ASN1Type, ASN1Value, IntegerType, RealType,
 };
 
 #[derive(Debug, PartialEq)]
@@ -79,6 +79,148 @@ impl Constraint {
         }
     }
 
+    /// Returns the type of real that should be used in a representation when applying the Constraint
+    /// ### Example
+    pub fn real_constraints(&self) -> RealType {
+        let Ok(RealTypeConstraints {
+            mantissa: (mantissa_min, mantissa_max),
+            base,
+            exponent: (exponent_min, exponent_max),
+        }) = self.unpack_as_real_components()
+        else {
+            return RealType::Unbounded;
+        };
+
+        if base == 2
+            && exponent_min >= -126
+            && exponent_max <= 127
+            && mantissa_min >= -9999999
+            && mantissa_max <= 9999999
+        {
+            RealType::F32
+        } else if base == 2
+            && exponent_min >= -1022
+            && exponent_max <= 1023
+            && mantissa_min >= -999999999999999
+            && mantissa_max <= 999999999999999
+        {
+            RealType::F64
+        } else {
+            RealType::Unbounded
+        }
+    }
+
+    fn unpack_as_real_components(&self) -> Result<RealTypeConstraints, GrammarError> {
+        let Constraint::Subtype(ElementSetSpecs {
+            set:
+                ElementOrSetOperation::Element(SubtypeElements::MultipleTypeConstraints(
+                    InnerTypeConstraint {
+                        is_partial,
+                        constraints,
+                    },
+                )),
+            ..
+        }) = self
+        else {
+            return Err(GrammarError::new(
+                &format!(
+                    "Failed to unpack constraint as value range. Constraint: {:?}",
+                    self
+                ),
+                GrammarErrorType::UnpackingError,
+            ));
+        };
+
+        let mut mantissa = None;
+        let mut base = None;
+        let mut exponent = None;
+
+        for c in constraints {
+            match c.identifier.as_str() {
+                "mantissa" => {
+                    let (from, to) = c.constraints.first().unwrap().unpack_as_value_range()
+                        .and_then(|(from, to, _)| {
+                            if let (Some(ASN1Value::Integer(from)), Some(ASN1Value::Integer(to))) = (from, to) {
+                                Ok((from, to))
+                            } else {
+                                Err(GrammarError::new(
+                                    &format!(
+                                        "Failed to unpack constraint as value range. Constraint: {:?}",
+                                        self
+                                    ),
+                                    GrammarErrorType::UnpackingError,
+                                ))
+                            }
+                        })?;
+
+                    mantissa = Some((from.clone(), to.clone()));
+                }
+
+                "base" => {
+                    let (value, _) = c.constraints.first().unwrap().unpack_as_strict_value()?;
+                    base = Some(value.unwrap_as_integer()?);
+                }
+
+                "exponent" => {
+                    let (from, to) = c.constraints.first().unwrap().unpack_as_value_range()
+                        .and_then(|(from, to, _)| {
+                            if let (Some(ASN1Value::Integer(from)), Some(ASN1Value::Integer(to))) = (from, to) {
+                                Ok((from, to))
+                            } else {
+                                Err(GrammarError::new(
+                                    &format!(
+                                        "Failed to unpack constraint as value range. Constraint: {:?}",
+                                        self
+                                    ),
+                                    GrammarErrorType::UnpackingError,
+                                ))
+                            }
+                        })?;
+
+                    exponent = Some((from.clone(), to.clone()));
+                }
+
+                _ => (),
+            }
+        }
+
+        let mantissa = mantissa.ok_or_else(|| {
+            GrammarError::new(
+                &format!(
+                    "Failed to unpack mantissa constraint as value range. Constraint: {:?}",
+                    self
+                ),
+                GrammarErrorType::UnpackingError,
+            )
+        })?;
+
+        let exponent = exponent.ok_or_else(|| {
+            GrammarError::new(
+                &format!(
+                    "Failed to unpack exponent constraint as value range. Constraint: {:?}",
+                    self
+                ),
+                GrammarErrorType::UnpackingError,
+            )
+        })?;
+
+        let base = base.ok_or_else(|| {
+            GrammarError::new(
+                &format!(
+                    "Failed to unpack base constraint as value range. Constraint: {:?}",
+                    self
+                ),
+                GrammarErrorType::UnpackingError,
+            )
+        })?;
+
+        Ok(RealTypeConstraints {
+            mantissa,
+            base,
+            exponent,
+        })
+    }
+
     pub fn unpack_as_value_range(
         &self,
     ) -> Result<(&Option<ASN1Value>, &Option<ASN1Value>, bool), GrammarError> {
@@ -113,6 +255,12 @@ impl Constraint {
             GrammarErrorType::UnpackingError,
         ))
     }
+}
+
+struct RealTypeConstraints {
+    mantissa: (i128, i128),
+    base: i128,
+    exponent: (i128, i128),
 }
 
 /// A ContentConstraint.

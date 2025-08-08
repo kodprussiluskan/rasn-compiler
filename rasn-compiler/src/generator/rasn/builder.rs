@@ -64,11 +64,7 @@ impl Rasn {
                     ASN1Type::Choice(_) => self.generate_choice(t),
                     ASN1Type::OctetString(_) => self.generate_octet_string(t),
                     ASN1Type::Time(_) => unimplemented!("rasn does not support TIME types yet!"),
-                    ASN1Type::Real(_) => Err(GeneratorError {
-                        kind: GeneratorErrorType::NotYetInplemented,
-                        details: "Real types are currently unsupported!".into(),
-                        top_level_declaration: None,
-                    }),
+                    ASN1Type::Real(_) => self.generate_real(t),
                     ASN1Type::ObjectIdentifier(_) => self.generate_oid(t),
                     ASN1Type::ObjectClassField(_) | ASN1Type::EmbeddedPdv | ASN1Type::External => {
                         self.generate_any(t)
@@ -168,6 +164,39 @@ impl Rasn {
             ))
         } else {
             self.type_mismatch_error(tld, "INTEGER")
+        }
+    }
+
+    pub(crate) fn generate_real(
+        &self,
+        tld: ToplevelTypeDefinition,
+    ) -> Result<TokenStream, GeneratorError> {
+        if let ASN1Type::Real(ref real) = tld.ty {
+            let name = self.to_rust_title_case(&tld.name);
+            let mut annotations = vec![
+                // quote!(delegate),
+                self.format_range_annotations(true, &real.constraints)?,
+                self.format_tag(tld.tag.as_ref(), false),
+            ];
+            if name.to_string() != tld.name {
+                annotations.push(self.format_identifier_annotation(
+                    &tld.name,
+                    &tld.comments,
+                    &tld.ty,
+                ));
+            }
+            Ok(real_template(
+                self.format_comments(&tld.comments)?,
+                name,
+                self.join_annotations(annotations, false, true)?,
+                real.real_type().to_token_stream(),
+            ))
+        } else {
+            Err(GeneratorError::new(
+                Some(ToplevelDefinition::Type(tld)),
+                "Expected REAL top-level declaration",
+                GeneratorErrorType::Asn1TypeMismatch,
+            ))
         }
     }
 
