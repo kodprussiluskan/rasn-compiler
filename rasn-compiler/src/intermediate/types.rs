@@ -189,6 +189,16 @@ pub struct Real {
     pub constraints: Vec<Constraint>,
 }
 
+impl Real {
+    pub fn real_type(&self) -> RealType {
+        self.constraints
+            .iter()
+            .fold(RealType::Unbounded, |acc, c| {
+                c.real_constraints().max_restrictive(acc)
+            })
+    }
+}
+
 impl From<Option<Vec<Constraint>>> for Real {
     fn from(value: Option<Vec<Constraint>>) -> Self {
         Self {

@@ -1261,8 +1261,24 @@ impl Rasn {
     }
 
     pub(crate) fn to_rust_enum_identifier(&self, input: &str) -> Ident {
-        let mut formatted = format_ident!("{}", input.replace('-', "_"));
-        if Self::RUST_KEYWORDS.contains(&input) {
+        let new_name = input.split('-').map(|word| {
+            let mut c = word.chars();
+            c.next().unwrap().to_uppercase().chain(c).collect::<String>()
+        })
+        .fold(String::new(), |mut result, item| {
+            result.push_str(&item);
+            result
+        });
+
+        // let mut c = input.chars();
+        // let input = match c.next() {
+        //     None => String::new(),
+        //     Some(f) => f.to_uppercase().chain(c).collect()
+        // };
+
+        // let mut formatted = format_ident!("{}", input.replace('-', "_"));
+        let mut formatted = format_ident!("{new_name}");
+        if Self::RUST_KEYWORDS.contains(&new_name.as_str()) {
             formatted = format_ident!("R_{formatted}");
         }
         formatted

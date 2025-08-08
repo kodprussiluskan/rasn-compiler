@@ -346,7 +346,29 @@ e2e_pdu!(
         pub const TEST_ENUM_VAL: TestEnum = TestEnum::test_2;                                "#
 );
 
-// REAL Types are currently not supported by rasn
+e2e_pdu!(
+    real_f32,
+    r#"SinglePrecision ::= REAL (WITH COMPONENTS { mantissa (-9999999..9999999), base (2), exponent (-126..127) })"#,
+    r#" #[derive(AsnType, Debug, Clone, Copy, Decode, Encode, PartialEq, PartialOrd)]
+        #[rasn(delegate)]
+        pub struct SinglePrecision(pub f32);                                 "#
+);
+
+// e2e_pdu!(
+//     real_f64_by_exponent,
+//     r#"DoublePrecision ::= REAL (WITH COMPONENTS { mantissa (-9999999..9999999), base (2), exponent (-128..127) })"#,
+//     r#" #[derive(AsnType, Debug, Clone, Copy, Decode, Encode, PartialEq, PartialOrd)]
+//         #[rasn(delegate)]
+//         pub struct DoublePrecision(pub f64);                                 "#
+// );
+
+// e2e_pdu!(
+//     real_f64_by_mantissa,
+//     r#"DoublePrecision ::= REAL (WITH COMPONENTS { mantissa (-99999999..99999999), base (2), exponent (-126..127) })"#,
+//     r#" #[derive(AsnType, Debug, Clone, Copy, Decode, Encode, PartialEq, PartialOrd)]
+//         #[rasn(delegate)]
+//         pub struct DoublePrecision(pub f64);                                 "#
+// );
 
 e2e_pdu!(
     bmp,
