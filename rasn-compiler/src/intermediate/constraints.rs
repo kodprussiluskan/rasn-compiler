@@ -115,8 +115,8 @@ impl Constraint {
             set:
                 ElementOrSetOperation::Element(SubtypeElements::MultipleTypeConstraints(
                     InnerTypeConstraint {
-                        is_partial,
                         constraints,
+                        ..
                     },
                 )),
             ..

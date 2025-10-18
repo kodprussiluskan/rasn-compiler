@@ -67,7 +67,7 @@ pub fn integer_template(
 pub fn real_template(
     comments: TokenStream,
     name: TokenStream,
-    annotations: TokenStream,
+    _annotations: TokenStream,
     real_type: TokenStream,
 ) -> TokenStream {
     quote! {
