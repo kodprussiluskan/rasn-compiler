@@ -200,10 +200,16 @@ impl Rasn {
             && ty.module_header.as_ref().is_some_and(|module| {
                 let module = module.borrow();
                 let builtins = types.unshadowed_builtins(Some(&module.name));
-                self.type_is_copy(&ty.ty, false, builtins, &mut |reference| {
-                    resolve(reference, &module, |id| declarations.contains_key(id))
-                        .is_some_and(|id| self.evaluate_copy(&id, declarations, types))
-                })
+                self.type_is_copy(
+                    &ty.ty,
+                    false,
+                    builtins,
+                    Some((&module.name, &ty.name)),
+                    &mut |reference| {
+                        resolve(reference, &module, |id| declarations.contains_key(id))
+                            .is_some_and(|id| self.evaluate_copy(&id, declarations, types))
+                    },
+                )
             });
         types.known.insert(id.clone(), copy);
         copy
@@ -213,8 +219,12 @@ impl Rasn {
         let builtins = self
             .copy_types
             .unshadowed_builtins(self.copy_module.as_ref().map(|module| module.name.as_str()));
+        let owner = self.collection_owner.borrow();
+        let context = self.copy_module.as_ref().and_then(|module| {
+            owner.as_ref().map(|name| (module.name.as_str(), name.as_str()))
+        });
         self.can_infer_copy()
-            && self.type_is_copy(ty, false, builtins, &mut |reference| {
+            && self.type_is_copy(ty, false, builtins, context, &mut |reference| {
                 self.copy_module.as_ref().is_some_and(|module| {
                     resolve(reference, module, |id| {
                         self.copy_types.known.contains_key(id)
@@ -238,6 +248,7 @@ impl Rasn {
         ty: &ASN1Type,
         inline: bool,
         builtins: [bool; COPY_BUILTINS.len()],
+        owner: Option<(&str, &str)>,
         resolve: &mut impl FnMut(&DeclarationElsewhere) -> bool,
     ) -> bool {
         let [utc_time, generalized_time, fixed_bits, fixed_octets] = builtins;
@@ -255,14 +266,20 @@ impl Rasn {
                 !inline && fixed_octets && octets.fixed_size().is_some()
             }
             ASN1Type::ElsewhereDeclaredType(reference) => resolve(reference),
+            ASN1Type::SequenceOf(collection) => {
+                self.collection_array_length_for(collection, owner)
+                    .is_ok_and(|count| count.is_some())
+                    && !collection.is_recursive
+                    && self.type_is_copy(&collection.element_type, inline, builtins, owner, resolve)
+            }
             ASN1Type::Sequence(seq) | ASN1Type::Set(seq) => seq
                 .members
                 .iter()
-                .all(|member| self.member_is_copy(member, builtins, resolve)),
+                .all(|member| self.member_is_copy(member, builtins, owner, resolve)),
             ASN1Type::Choice(choice) => choice
                 .options
                 .iter()
-                .all(|option| self.member_is_copy(option, builtins, resolve)),
+                .all(|option| self.member_is_copy(option, builtins, owner, resolve)),
             _ => false,
         }
     }
@@ -271,6 +288,7 @@ impl Rasn {
         &self,
         member: &impl MemberOrOption,
         builtins: [bool; COPY_BUILTINS.len()],
+        owner: Option<(&str, &str)>,
         resolve: &mut impl FnMut(&DeclarationElsewhere) -> bool,
     ) -> bool {
         // Recursive named or anonymous fields use Box. Option never changes eligibility.
@@ -279,6 +297,7 @@ impl Rasn {
                 member.ty(),
                 !Self::needs_unnesting(member.ty()),
                 builtins,
+                owner,
                 resolve,
             )
     }

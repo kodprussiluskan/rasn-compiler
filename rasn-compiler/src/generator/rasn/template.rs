@@ -289,21 +289,17 @@ pub fn sequence_or_set_template(
 }
 
 pub fn sequence_or_set_of_template(
-    is_set_of: bool,
     comments: TokenStream,
     name: TokenStream,
     anonymous_item: TokenStream,
-    member_type: TokenStream,
+    storage_type: TokenStream,
     annotations: TokenStream,
 ) -> TokenStream {
-    let generic_type = is_set_of
-        .then(|| quote!(SetOf))
-        .unwrap_or(quote!(SequenceOf));
     quote! {
             #anonymous_item
             #comments
             #annotations
-            pub struct #name(pub #generic_type<#member_type>);
+            pub struct #name(pub #storage_type);
     }
 }
 

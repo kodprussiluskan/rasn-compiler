@@ -611,7 +611,7 @@ impl Rasn {
                     parent_name,
                     s.is_recursive,
                 )?;
-                (s.constraints().to_owned(), quote!(SequenceOf<#inner_type>))
+                (s.constraints().to_owned(), self.collection_type(s, false, inner_type)?)
             }
             ASN1Type::SetOf(s) => {
                 if self.contains_real(&s.element_type) {
@@ -752,9 +752,13 @@ impl Rasn {
                 NotYetInplemented,
                 "Sequence values are currently unsupported!"
             )),
-            ASN1Type::SetOf(so) | ASN1Type::SequenceOf(so) => {
+            ASN1Type::SequenceOf(so) => {
                 let inner = self.type_to_tokens(&so.element_type)?;
-                Ok(quote!(SequenceOf<#inner>))
+                self.collection_type(so, false, inner)
+            }
+            ASN1Type::SetOf(so) => {
+                let inner = self.type_to_tokens(&so.element_type)?;
+                Ok(quote!(SetOf<#inner>))
             }
             ASN1Type::RelativeOid(_) => Ok(quote!(RelativeOid)),
             ASN1Type::ObjectIdentifier(_) => Err(error!(

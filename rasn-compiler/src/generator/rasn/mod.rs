@@ -23,6 +23,7 @@ use super::{
 mod builder;
 mod copy;
 mod real;
+mod storage;
 mod template;
 mod utils;
 
@@ -40,6 +41,9 @@ pub struct Rasn {
     required_derives: Vec<String>,
     copy_types: copy::CopyTypes,
     copy_module: Option<ModuleHeader>,
+    fixed_size_arrays: bool,
+    collection_layout: storage::CollectionLayout,
+    collection_owner: std::cell::RefCell<Option<String>>,
 }
 
 #[cfg_attr(target_family = "wasm", wasm_bindgen(getter_with_clone))]
@@ -160,6 +164,9 @@ impl Backend for Rasn {
             required_derives,
             copy_types: copy::CopyTypes::default(),
             copy_module: None,
+            fixed_size_arrays: false,
+            collection_layout: storage::CollectionLayout::default(),
+            collection_owner: std::cell::RefCell::default(),
         }
     }
 
@@ -188,6 +195,7 @@ impl Backend for Rasn {
         modules: Vec<Vec<ToplevelDefinition>>,
     ) -> Result<Vec<GeneratedModule>, GeneratorError> {
         let declarations = type_declarations(&modules);
+        self.collection_layout = self.collect_collection_layout(&declarations)?;
         self.copy_types = self.collect_copy_types(&modules, &declarations);
         let real_constants: Vec<_> = modules
             .iter()
@@ -210,6 +218,7 @@ impl Backend for Rasn {
             .map(|(module, constants)| self.render_module(module, constants))
             .collect();
         self.copy_types = copy::CopyTypes::default();
+        self.collection_layout = storage::CollectionLayout::default();
         generated
     }
 

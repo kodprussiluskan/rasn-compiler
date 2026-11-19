@@ -43,6 +43,7 @@ impl Rasn {
         &self,
         tld: ToplevelDefinition,
     ) -> Result<TokenStream, GeneratorError> {
+        *self.collection_owner.borrow_mut() = Some(tld.name().to_owned());
         match tld {
             ToplevelDefinition::Type(t) => self.generate_type(t),
             ToplevelDefinition::Value(v) => self.generate_value(v),
@@ -919,6 +920,11 @@ impl Rasn {
                 (anonymous_item, format_ident!("Anonymous{}", &name.to_string()).to_token_stream())
             }
         };
+        let storage_type = self.collection_type(seq_or_set_of, is_set_of, member_type)
+            .map_err(|mut error| {
+                error.top_level_declaration = Some(Box::new(ToplevelDefinition::Type(tld.clone())));
+                error
+            })?;
         let mut annotations = vec![
             quote!(delegate),
             self.format_jer(&tld.jer),
@@ -929,12 +935,11 @@ impl Rasn {
             annotations.push(self.format_identifier_annotation(&tld.name, &tld.comments, &tld.ty));
         }
         Ok(sequence_or_set_of_template(
-            is_set_of,
             self.format_comments(&tld.comments),
             name,
             anonymous_item,
-            member_type,
-            self.join_annotations_with_real(annotations, false, true, self.contains_real(&tld.ty))?,
+            storage_type,
+            self.join_annotations_with_real(annotations, self.can_derive_copy(&tld.ty), true, self.contains_real(&tld.ty))?,
         ))
     }
 
