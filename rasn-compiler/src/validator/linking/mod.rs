@@ -1343,6 +1343,26 @@ impl ASN1Value {
                 Ok(())
             }
             (_, ASN1Value::ElsewhereDeclaredValue { .. }) => Err(GrammarError::todo()),
+            (ASN1Type::Boolean(_), ASN1Value::Boolean(_))
+            | (ASN1Type::Null, ASN1Value::Null)
+            | (ASN1Type::Real(_), ASN1Value::Real(_)) => {
+                Ok(())
+            }
+            (ASN1Type::Boolean(_) | ASN1Type::Null, ASN1Value::LinkedNestedValue { value, .. }) => {
+                value.link_with_type(tlds, ty, type_name)
+            }
+            (
+                _,
+                ASN1Value::Boolean(_)
+                | ASN1Value::Integer(_)
+                | ASN1Value::Real(_)
+                | ASN1Value::String(_)
+                | ASN1Value::Null,
+            ) if tlds.linking_collection_element() => Err(grammar_error!(
+                LinkerError,
+                "Value does not match expected type {}",
+                ty.as_str()
+            )),
             _ => Ok(()),
         }
     }
@@ -1414,13 +1434,14 @@ impl ASN1Value {
         s: &SequenceOrSetOf,
         tlds: &Scope<'_>,
     ) -> Result<ASN1Value, GrammarError> {
-        let _ = val.iter_mut().try_for_each(|v| {
+        let element_scope = tlds.for_collection_element();
+        val.iter_mut().try_for_each(|v| {
             v.1.link_with_type(
-                tlds,
+                &element_scope,
                 &s.element_type,
                 Some(&s.element_type.as_str().into_owned()),
             )
-        });
+        })?;
         Ok(ASN1Value::LinkedArrayLikeValue(
             val.iter().map(|v| v.1.clone()).collect(),
         ))
@@ -1459,20 +1480,29 @@ impl ASN1Value {
 
         s.members
             .iter()
-            .map(|member| {
-                val.iter()
-                    .find_map(|(name, value)| {
-                        (name.as_ref() == Some(&member.name))
-                            .then_some(StructLikeFieldValue::Explicit(value.clone()))
-                    })
-                    .or(member
-                        .optionality
-                        .default()
-                        .map(|d| StructLikeFieldValue::Implicit(Box::new(d.clone()))))
-                    .ok_or_else(|| {
-                        grammar_error!(LinkerError, "No value for field {} found!", member.name)
-                    })
-                    .map(|field_value| (member.name.clone(), member.ty.clone(), field_value))
+            .filter_map(|member| {
+                if matches!(member.optionality, Optionality::Optional)
+                    && !val
+                        .iter()
+                        .any(|(name, _)| name.as_ref() == Some(&member.name))
+                {
+                    return None;
+                }
+                Some(
+                    val.iter()
+                        .find_map(|(name, value)| {
+                            (name.as_ref() == Some(&member.name))
+                                .then_some(StructLikeFieldValue::Explicit(value.clone()))
+                        })
+                        .or(member
+                            .optionality
+                            .default()
+                            .map(|d| StructLikeFieldValue::Implicit(Box::new(d.clone()))))
+                        .ok_or_else(|| {
+                            grammar_error!(LinkerError, "No value for field {} found!", member.name)
+                        })
+                        .map(|field_value| (member.name.clone(), member.ty.clone(), field_value)),
+                )
             })
             .collect::<Result<Vec<_>, _>>()
             .map(ASN1Value::LinkedStructLikeValue)

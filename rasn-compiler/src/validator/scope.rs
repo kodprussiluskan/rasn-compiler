@@ -21,6 +21,7 @@ pub(super) struct Scope<'a> {
     parameters: Option<&'a BTreeMap<String, ToplevelDefinition>>,
     expansion: Option<&'a Expansion<'a>>,
     resolving_actual: bool,
+    linking_collection_element: bool,
     generated: Option<&'a RefCell<Vec<ToplevelTypeDefinition>>>,
 }
 
@@ -39,6 +40,7 @@ impl<'a> Scope<'a> {
             parameters: None,
             expansion: None,
             resolving_actual: false,
+            linking_collection_element: false,
             generated: None,
         }
     }
@@ -48,6 +50,7 @@ impl<'a> Scope<'a> {
             linking: self.linking,
             expansion: self.expansion,
             resolving_actual: self.resolving_actual,
+            linking_collection_element: self.linking_collection_element,
             generated: self.generated,
             ..Self::new(self.modules, module)
         }
@@ -75,6 +78,17 @@ impl<'a> Scope<'a> {
             value_module: self.value_module,
             ..self.for_definition(header)
         }
+    }
+
+    pub fn for_collection_element(&self) -> Self {
+        Self {
+            linking_collection_element: true,
+            ..*self
+        }
+    }
+
+    pub fn linking_collection_element(&self) -> bool {
+        self.linking_collection_element
     }
 
     pub fn value_scope(&self) -> Self {

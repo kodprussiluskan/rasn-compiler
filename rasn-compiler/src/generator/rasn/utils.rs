@@ -571,14 +571,18 @@ impl Rasn {
         is_recursive: bool,
     ) -> Result<(Vec<Constraint>, TokenStream), GeneratorError> {
         Ok(match ty {
-            ASN1Type::Jer(_, ty) => return self.constraints_and_type_name(ty, name, parent_name, is_recursive),
+            ASN1Type::Jer(_, ty) => {
+                return self.constraints_and_type_name(ty, name, parent_name, is_recursive)
+            }
             ASN1Type::Null => (vec![], quote!(())),
             ASN1Type::Boolean(b) => (b.constraints.clone(), quote!(bool)),
             ASN1Type::Integer(i) => (
                 i.constraints.clone(),
                 self.inline_integer_type(i)?.to_token_stream(),
             ),
-            ASN1Type::Real(real) if !real.constraints.is_empty() => (vec![], Self::real_storage(real)?),
+            ASN1Type::Real(real) if !real.constraints.is_empty() => {
+                (vec![], Self::real_storage(real)?)
+            }
             ASN1Type::Real(_) => (vec![], quote!(f64)),
             ASN1Type::ObjectIdentifier(o) => (o.constraints.clone(), quote!(ObjectIdentifier)),
             ASN1Type::RelativeOid(o) => (o.constraints.clone(), quote!(RelativeOid)),
@@ -713,11 +717,51 @@ impl Rasn {
         let mut output = TokenStream::new();
         for member in members {
             if let Some(value) = member.optionality.default() {
-                let val = self.value_to_tokens(
-                    value,
-                    Some(&self.to_rust_title_case(&self.type_to_tokens(&member.ty)?.to_string())),
-                )?;
-                let ty = self.type_to_tokens(&member.ty)?;
+                let (val, ty) = if Self::contains_collection_value(value)
+                    || matches!(&member.ty, ASN1Type::ElsewhereDeclaredType(reference) if reference.module.is_some())
+                {
+                    let header = self.copy_module.as_ref();
+                    let owner = header
+                        .zip(self.collection_owner.borrow().clone())
+                        .map(|(header, owner)| (header.name.clone(), owner));
+                    let nested = Self::needs_unnesting(&member.ty)
+                        .then(|| self.inner_name(&member.name, parent_name).to_string());
+                    let val = self.member_value(
+                        value,
+                        &member.ty,
+                        &member.name,
+                        parent_name,
+                        header,
+                        owner
+                            .as_ref()
+                            .map(|(module, owner)| (module.as_str(), owner.as_str())),
+                    )?;
+                    let ty = match nested {
+                        Some(name) => format_ident!("{name}").into_token_stream(),
+                        None => {
+                            self.constraints_and_type_name(
+                                &member.ty,
+                                &member.name,
+                                parent_name,
+                                member.is_recursive,
+                            )?
+                            .1
+                        }
+                    };
+                    (val, ty)
+                } else {
+                    (
+                        self.value_to_tokens(
+                            value,
+                            Some(
+                                &self.to_rust_title_case(
+                                    &self.type_to_tokens(&member.ty)?.to_string(),
+                                ),
+                            ),
+                        )?,
+                        self.type_to_tokens(&member.ty)?,
+                    )
+                };
                 let method_name = self.default_method_name(parent_name, &member.name);
                 output.append_all(quote! {
                     fn #method_name() -> #ty {
@@ -889,7 +933,9 @@ impl Rasn {
                     .map(|arc| {
                         arc.number
                             .and_then(|number| u32::try_from(number).ok())
-                            .ok_or_else(|| error!(Unsupported, "RELATIVE-OID arc is missing or exceeds u32"))
+                            .ok_or_else(|| {
+                                error!(Unsupported, "RELATIVE-OID arc is missing or exceeds u32")
+                            })
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(quote!(RelativeOid::new_unchecked(alloc::borrow::Cow::Borrowed(&[#(#arcs),*]))))

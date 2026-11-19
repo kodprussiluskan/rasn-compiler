@@ -308,7 +308,9 @@ impl Rasn {
             let initializer = match value {
                 ASN1Value::Real(value) => wrap_literal(*value),
                 ASN1Value::Integer(value) => wrap_literal(*value as f64),
-                ASN1Value::LinkedElsewhereDefinedValue { .. } => self.value_to_tokens(value, None)?,
+                ASN1Value::LinkedElsewhereDefinedValue { .. } => {
+                    self.value_to_tokens(value, None)?
+                }
                 _ => {
                     return Err(GeneratorError::new(
                         Some(ToplevelDefinition::Value(tld.clone())),
@@ -332,6 +334,30 @@ impl Rasn {
         tld: ToplevelValueDefinition,
     ) -> Result<TokenStream, GeneratorError> {
         let ty = &tld.associated_type;
+        let header = tld.module_header.as_ref().map(|header| header.borrow());
+        if self.requires_typed_value(ty, header.as_deref(), &mut Vec::new()) {
+            let value = self.typed_value(&tld.value, ty, None, header.as_deref(), None)?;
+            let storage = match ty {
+                ASN1Type::SequenceOf(collection)
+                    if self
+                        .collection_array_length_for(collection, None)?
+                        .is_none() =>
+                {
+                    let element = self.type_to_tokens(&collection.element_type)?;
+                    quote!(Vec<#element>)
+                }
+                _ => self.type_to_tokens(ty)?,
+            };
+            return call_template!(
+                self,
+                lazy_static_value_template,
+                tld,
+                storage,
+                value,
+                self.config.no_std_compliant_bindings
+            );
+        }
+        drop(header);
         match &tld.value {
             ASN1Value::Null if ty.is_builtin_type() => {
                 call_template!(self, primitive_value_template, tld, quote!(()), quote!(()))
@@ -898,9 +924,9 @@ impl Rasn {
             });
         }
         let (anonymous_item, member_type) = match element_type {
-            ASN1Type::Real(real) if !is_set_of && seq_or_set_of.element_tag.is_none() => (
-                TokenStream::new(), Self::real_storage(real)?,
-            ),
+            ASN1Type::Real(real) if !is_set_of && seq_or_set_of.element_tag.is_none() => {
+                (TokenStream::new(), Self::real_storage(real)?)
+            }
             ASN1Type::ElsewhereDeclaredType(d) => (
                 TokenStream::new(), self.to_rust_qualified_type(d.module.as_deref(), &d.identifier),
             ),

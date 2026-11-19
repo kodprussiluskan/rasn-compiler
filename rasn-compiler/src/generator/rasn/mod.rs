@@ -26,8 +26,9 @@ mod real;
 mod storage;
 mod template;
 mod utils;
+mod values;
 
-use copy::{TypeDeclarations, type_declarations};
+use copy::{type_declarations, TypeDeclarations};
 
 #[derive(Debug)]
 /// A compiler backend that generates bindings to be used with
@@ -42,8 +43,9 @@ pub struct Rasn {
     copy_types: copy::CopyTypes,
     copy_module: Option<ModuleHeader>,
     fixed_size_arrays: bool,
-    collection_layout: storage::CollectionLayout,
+    collection_layout: Option<storage::CollectionLayout>,
     collection_owner: std::cell::RefCell<Option<String>>,
+    value_types: BTreeMap<(String, String), ToplevelTypeDefinition>,
 }
 
 #[cfg_attr(target_family = "wasm", wasm_bindgen(getter_with_clone))]
@@ -165,8 +167,9 @@ impl Backend for Rasn {
             copy_types: copy::CopyTypes::default(),
             copy_module: None,
             fixed_size_arrays: false,
-            collection_layout: storage::CollectionLayout::default(),
+            collection_layout: None,
             collection_owner: std::cell::RefCell::default(),
+            value_types: BTreeMap::new(),
         }
     }
 
@@ -194,8 +197,22 @@ impl Backend for Rasn {
         &mut self,
         modules: Vec<Vec<ToplevelDefinition>>,
     ) -> Result<Vec<GeneratedModule>, GeneratorError> {
+        self.value_types = modules
+            .iter()
+            .flatten()
+            .filter_map(|definition| {
+                let ToplevelDefinition::Type(declaration) = definition else {
+                    return None;
+                };
+                let header = declaration.module_header.as_ref()?.borrow();
+                Some((
+                    (header.name.clone(), declaration.name.clone()),
+                    declaration.clone(),
+                ))
+            })
+            .collect();
         let declarations = type_declarations(&modules);
-        self.collection_layout = self.collect_collection_layout(&declarations)?;
+        self.collection_layout = Some(self.collect_collection_layout(&declarations)?);
         self.copy_types = self.collect_copy_types(&modules, &declarations);
         let real_constants: Vec<_> = modules
             .iter()
@@ -218,7 +235,8 @@ impl Backend for Rasn {
             .map(|(module, constants)| self.render_module(module, constants))
             .collect();
         self.copy_types = copy::CopyTypes::default();
-        self.collection_layout = storage::CollectionLayout::default();
+        self.collection_layout = None;
+        self.value_types.clear();
         generated
     }
 
@@ -244,6 +262,34 @@ impl Backend for Rasn {
 }
 
 impl Rasn {
+    /// Enables ordinary Rust arrays for provably fixed-size SEQUENCE OF collections.
+    ///
+    /// The default is false. Named ASN.1 collections retain their delegating wrapper.
+    /// Array storage changes public field types and constructors, and decoding still
+    /// allocates a temporary vector. Extensible sizes, recursive layout edges and
+    /// named subtype references keep their existing collection representation.
+    /// Standalone `Backend::generate` uses vectors because it lacks batch layout analysis.
+    ///
+    /// Counts must fit u32, making generated count literals portable across supported
+    /// 32-bit and 64-bit targets. Large inline arrays can exceed target layout limits
+    /// or the available stack for their element type.
+    ///
+    /// ```
+    /// use rasn_compiler::prelude::{Compiler, RasnBackend};
+    ///
+    /// let result = Compiler::<RasnBackend, _>::new()
+    ///     .with_backend(RasnBackend::default().with_fixed_size_arrays(true))
+    ///     .add_asn_literal("Example DEFINITIONS ::= BEGIN Flags ::= SEQUENCE SIZE (3) OF BOOLEAN END")
+    ///     .compile_to_string()
+    ///     .unwrap();
+    /// assert!(result.warnings.is_empty());
+    /// // Flags wraps [AnonymousFlags; 3]. The default backend uses SequenceOf.
+    /// ```
+    pub fn with_fixed_size_arrays(mut self, enabled: bool) -> Self {
+        self.fixed_size_arrays = enabled;
+        self
+    }
+
     const REQUIRED_DERIVES: [&'static str; 6] =
         ["AsnType", "Debug", "Clone", "Decode", "Encode", "PartialEq"];
 

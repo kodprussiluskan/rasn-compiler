@@ -1,0 +1,44 @@
+Collections DEFINITIONS AUTOMATIC TAGS ::= BEGIN
+    Flag ::= BOOLEAN
+    Flags ::= SEQUENCE SIZE (3) OF BOOLEAN
+    flags Flags ::= {TRUE, FALSE, TRUE}
+    copied Flags ::= flags
+    NamedFlags ::= SEQUENCE SIZE (3) OF Flag
+    namedFlags NamedFlags ::= {TRUE, FALSE, TRUE}
+    Empty ::= SEQUENCE SIZE (0) OF BOOLEAN
+    empty Empty ::= {}
+    Matrix ::= SEQUENCE SIZE (2) OF SEQUENCE SIZE (2) OF BOOLEAN
+    matrix Matrix ::= {{TRUE, FALSE}, {FALSE, TRUE}}
+    Record ::= SEQUENCE {
+        matrix SEQUENCE SIZE (2) OF SEQUENCE SIZE (2) OF BOOLEAN,
+        flags Flags DEFAULT {TRUE, FALSE, TRUE},
+        inline SEQUENCE SIZE (3) OF BOOLEAN DEFAULT {TRUE, FALSE, TRUE},
+        optional SEQUENCE SIZE (1) OF BOOLEAN OPTIONAL
+    }
+    record Record ::= {matrix {{TRUE, FALSE}, {FALSE, TRUE}}}
+    present Record ::= {matrix {{TRUE, FALSE}, {FALSE, TRUE}}, optional {TRUE}}
+    Pick ::= CHOICE { flags SEQUENCE SIZE (3) OF BOOLEAN }
+    pick Pick ::= flags: {TRUE, FALSE, TRUE}
+    Base ::= SEQUENCE OF Flag
+    Three ::= Base (SIZE (3))
+    three Three ::= {TRUE, FALSE, TRUE}
+    FixedBase ::= SEQUENCE SIZE (3) OF Flag
+    FixedAlias ::= FixedBase (SIZE (3))
+    fixedAlias FixedAlias ::= {TRUE, FALSE, TRUE}
+    ScalarRecord ::= SEQUENCE { id INTEGER, enabled BOOLEAN OPTIONAL }
+    scalarRecord ScalarRecord ::= { id 5 }
+END
+Origin DEFINITIONS ::= BEGIN
+    EXPORTS Imported, Flag;
+    Flag ::= INTEGER (0..9)
+    Imported ::= SEQUENCE SIZE (1) OF BOOLEAN
+END
+Consumer DEFINITIONS ::= BEGIN
+    IMPORTS Imported, Flag FROM Origin;
+    Flag ::= BOOLEAN
+    imported Imported ::= {TRUE}
+    Defaults ::= SEQUENCE {
+        local Origin.Flag DEFAULT 7,
+        flags Imported DEFAULT {TRUE}
+    }
+END

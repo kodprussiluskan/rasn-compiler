@@ -50,14 +50,12 @@ impl Rasn {
         if !self.fixed_size_arrays {
             return Ok(None);
         }
-        if self
-            .collection_layout
-            .cyclic
-            .iter()
-            .any(|((module, name), list)| {
-                Some((module.as_str(), name.as_str())) == owner && list == collection
-            })
-        {
+        let Some(layout) = &self.collection_layout else {
+            return Ok(None);
+        };
+        if layout.cyclic.iter().any(|((module, name), list)| {
+            Some((module.as_str(), name.as_str())) == owner && list == collection
+        }) {
             return Ok(None);
         }
         fixed_count(&collection.constraints)
@@ -207,7 +205,7 @@ fn collection_candidates<'a>(ty: &'a ASN1Type, output: &mut Vec<&'a SequenceOrSe
     }
 }
 
-fn fixed_count(constraints: &[Constraint]) -> Result<Option<u32>, GeneratorError> {
+pub(super) fn fixed_count(constraints: &[Constraint]) -> Result<Option<u32>, GeneratorError> {
     if constraints.is_empty() {
         return Ok(None);
     }
