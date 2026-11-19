@@ -330,6 +330,7 @@ impl Rasn {
             |mut acc, (i, m)| {
                 let nested = if Self::needs_unnesting(&m.ty) {
                     Some(self.generate_type(ToplevelTypeDefinition {
+                        jer: Default::default(),
                         parameterization: None,
                         comments: INNER_TYPE_COMMENT.into(),
                         name: self.inner_name(&m.name, parent_name).to_string(),
@@ -423,6 +424,7 @@ impl Rasn {
             |mut acc, (i, o)| {
                 let nested = if Self::needs_unnesting(&o.ty) {
                     Some(self.generate_type(ToplevelTypeDefinition {
+                        jer: Default::default(),
                         parameterization: None,
                         comments: INNER_TYPE_COMMENT.into(),
                         name: self.inner_name(&o.name, parent_name).to_string(),
@@ -569,6 +571,7 @@ impl Rasn {
         is_recursive: bool,
     ) -> Result<(Vec<Constraint>, TokenStream), GeneratorError> {
         Ok(match ty {
+            ASN1Type::Jer(_, ty) => return self.constraints_and_type_name(ty, name, parent_name, is_recursive),
             ASN1Type::Null => (vec![], quote!(())),
             ASN1Type::Boolean(b) => (b.constraints.clone(), quote!(bool)),
             ASN1Type::Integer(i) => (
@@ -713,6 +716,7 @@ impl Rasn {
 
     pub(crate) fn type_to_tokens(&self, ty: &ASN1Type) -> Result<TokenStream, GeneratorError> {
         match ty {
+            ASN1Type::Jer(_, ty) => self.type_to_tokens(ty),
             ASN1Type::Null => Ok(quote!(())),
             ASN1Type::Boolean(_) => Ok(quote!(bool)),
             ASN1Type::Integer(i) => Ok(i.int_type().to_token_stream()),
@@ -1294,12 +1298,42 @@ impl Rasn {
         }
     }
 
+    pub(super) fn format_jer(&self, jer: &crate::intermediate::jer::Resolved) -> TokenStream {
+        use crate::intermediate::jer::Representation;
+        if jer.is_empty() {
+            return TokenStream::new();
+        }
+        let mut instructions = Vec::new();
+        if let Some(representation) = jer.representation {
+            instructions.push(match representation {
+                Representation::Default => quote!(default),
+                Representation::Array => quote!(array),
+                Representation::Base64 => quote!(base64),
+                Representation::Object => quote!(object),
+                Representation::Unwrapped => quote!(unwrapped),
+            });
+        }
+        instructions.extend(jer.names.iter().map(|(from, to)| quote!(name(#from, #to))));
+        if let Some(text) = &jer.text {
+            if text.is_empty() {
+                instructions.push(quote!(no_text));
+            } else {
+                instructions.extend(text.iter().map(|(from, to)| quote!(text(#from, #to))));
+            }
+        }
+        quote!(jer(#(#instructions),*))
+    }
+
     pub(super) fn format_name_and_common_annotations(
         &self,
         tld: &ToplevelTypeDefinition,
     ) -> (TokenStream, Vec<TokenStream>) {
         let name = self.to_rust_title_case(&tld.name);
-        let mut annotations = vec![quote!(delegate), self.format_tag(tld.tag.as_ref())];
+        let mut annotations = vec![
+            quote!(delegate),
+            self.format_tag(tld.tag.as_ref()),
+            self.format_jer(&tld.jer),
+        ];
 
         if name.to_string() != tld.name {
             annotations.push(self.format_identifier_annotation(&tld.name, &tld.comments, &tld.ty));

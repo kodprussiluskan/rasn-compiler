@@ -105,11 +105,13 @@ pub fn choice(input: Input<'_>) -> ParserResult<'_, ASN1Type> {
 }
 
 fn choice_option(input: Input<'_>) -> ParserResult<'_, ChoiceOption> {
-    into((
-        skip_ws_and_comments(identifier),
-        opt(asn_tag),
-        skip_ws_and_comments(asn1_type),
-        opt(skip_ws_and_comments(constraints)),
+    into(map(
+        (
+            skip_ws_and_comments(identifier),
+            skip_ws_and_comments(super::tagged_type),
+            opt(skip_ws_and_comments(constraints)),
+        ),
+        |(name, (tag, ty), constraints)| (name, tag, ty, constraints),
     ))
     .parse(input)
 }

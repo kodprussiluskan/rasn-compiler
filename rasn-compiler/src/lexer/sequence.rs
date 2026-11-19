@@ -126,12 +126,14 @@ pub fn sequence_component(input: Input<'_>) -> ParserResult<'_, SequenceComponen
 }
 
 pub fn sequence_or_set_member(input: Input<'_>) -> ParserResult<'_, SequenceOrSetMember> {
-    into((
-        skip_ws_and_comments(identifier),
-        opt(asn_tag),
-        skip_ws_and_comments(asn1_type),
-        opt(constraints),
-        skip_ws_and_comments(optionality(asn1_value)),
+    into(map(
+        (
+            skip_ws_and_comments(identifier),
+            skip_ws_and_comments(super::tagged_type),
+            opt(constraints),
+            skip_ws_and_comments(optionality(asn1_value)),
+        ),
+        |(name, (tag, ty), constraints, optionality)| (name, tag, ty, constraints, optionality),
     ))
     .parse(input)
 }

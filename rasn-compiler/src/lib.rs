@@ -498,13 +498,18 @@ impl<B: Backend> Compiler<B, CompilerReady> {
                     .flat_map(|(header, tlds)| {
                         let header_ref = Rc::new(RefCell::new(header));
                         tlds.into_iter().map(move |mut tld| {
-                            tld.apply_tagging_environment(&header_ref.borrow().tagging_environment);
                             tld.set_module_header(header_ref.clone());
                             tld
                         })
                     })
                     .collect(),
             );
+        }
+        validator::jer::resolve(&mut modules)?;
+        for definition in &mut modules {
+            if let Some(header) = definition.get_module_header() {
+                definition.apply_tagging_environment(&header.borrow().tagging_environment);
+            }
         }
         let (valid_items, mut validator_errors) = Validator::new(modules).validate()?;
         let modules = valid_items.into_iter().fold(

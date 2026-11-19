@@ -7,8 +7,7 @@ use nom::{
 };
 
 use super::{
-    asn1_type,
-    common::{asn_tag, opt_parentheses, skip_ws_and_comments, value_reference},
+    common::{opt_parentheses, skip_ws_and_comments, value_reference},
     constraint::constraints,
     error::ParserResult,
 };
@@ -30,7 +29,7 @@ pub fn sequence_of(input: Input<'_>) -> ParserResult<'_, ASN1Type> {
             ),
             preceded(
                 skip_ws_and_comments(pair(tag(OF), opt(skip_ws_and_comments(value_reference)))),
-                skip_ws_and_comments(pair(opt(asn_tag), skip_ws_and_comments(asn1_type))),
+                skip_ws_and_comments(super::tagged_type),
             ),
         ),
         |m| ASN1Type::SequenceOf(m.into()),

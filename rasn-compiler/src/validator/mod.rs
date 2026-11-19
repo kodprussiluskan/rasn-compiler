@@ -6,6 +6,7 @@
 //! data elements resolve, and checks for conflicting
 //! constraints and value definitions.
 pub(crate) mod error;
+pub(crate) mod jer;
 mod linking;
 #[cfg(test)]
 mod tests;

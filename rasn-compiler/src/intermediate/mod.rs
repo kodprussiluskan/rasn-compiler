@@ -10,6 +10,7 @@ pub mod constraints;
 pub mod encoding_rules;
 pub mod error;
 pub mod information_object;
+pub mod jer;
 pub mod macros;
 pub mod parameterization;
 pub mod types;
@@ -418,6 +419,7 @@ impl From<(ObjectIdentifierValue, Option<&str>)> for DefinitiveIdentifier {
 /// Rec. ITU-T X.680 (02/2021) § 13
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModuleHeader {
+    pub jer: Vec<jer::Assignment>,
     pub name: String,
     pub module_identifier: Option<DefinitiveIdentifier>,
     pub encoding_reference_default: Option<EncodingReferenceDefault>,
@@ -470,6 +472,7 @@ impl
             ));
         Self {
             name: value.0.into(),
+            jer: Vec::new(),
             module_identifier: value.1,
             encoding_reference_default,
             tagging_environment,
@@ -746,6 +749,7 @@ impl
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToplevelTypeDefinition {
+    pub jer: jer::Resolved,
     pub comments: String,
     pub tag: Option<AsnTag>,
     pub name: String,
@@ -763,6 +767,7 @@ impl ToplevelTypeDefinition {
 impl From<(&str, ASN1Type)> for ToplevelTypeDefinition {
     fn from(value: (&str, ASN1Type)) -> Self {
         Self {
+            jer: jer::Resolved::default(),
             comments: String::new(),
             tag: None,
             name: value.0.to_owned(),
@@ -790,6 +795,7 @@ impl
         ),
     ) -> Self {
         Self {
+            jer: jer::Resolved::default(),
             comments: value.0.join("\n"),
             name: value.1.into(),
             parameterization: value.2,
@@ -807,6 +813,7 @@ impl
 #[cfg_attr(not(test), derive(Debug))]
 #[derive(Clone, PartialEq)]
 pub enum ASN1Type {
+    Jer(Vec<(bool, jer::Instruction)>, Box<ASN1Type>),
     Null,
     Boolean(Boolean),
     Integer(Integer),
@@ -835,6 +842,7 @@ pub enum ASN1Type {
 impl ASN1Type {
     pub fn as_str(&self) -> Cow<'_, str> {
         match self {
+            ASN1Type::Jer(_, ty) => ty.as_str(),
             ASN1Type::Null => Cow::Borrowed(NULL),
             ASN1Type::Boolean(_) => Cow::Borrowed(BOOLEAN),
             ASN1Type::Integer(_) => Cow::Borrowed(INTEGER),
@@ -921,6 +929,7 @@ impl ASN1Type {
 
     pub fn constraints(&self) -> &[Constraint] {
         match self {
+            ASN1Type::Jer(_, ty) => ty.constraints(),
             ASN1Type::Boolean(b) => b.constraints(),
             ASN1Type::Real(r) => r.constraints(),
             ASN1Type::Integer(i) => i.constraints(),
@@ -947,6 +956,7 @@ impl ASN1Type {
 
     pub fn constraints_mut(&mut self) -> Option<&mut Vec<Constraint>> {
         match self {
+            ASN1Type::Jer(_, ty) => ty.constraints_mut(),
             ASN1Type::Boolean(b) => Some(b.constraints_mut()),
             ASN1Type::Real(r) => Some(r.constraints_mut()),
             ASN1Type::Integer(i) => Some(i.constraints_mut()),

@@ -167,6 +167,7 @@ fn parses_toplevel_crossrefering_declaration() {
     assert_eq!(
         tld,
         ToplevelTypeDefinition {
+            jer: Default::default(),
             parameterization: None,
             comments: " Comments go here".into(),
             name: "EventZone".into(),
@@ -233,6 +234,7 @@ fn parses_anonymous_sequence_of_declaration() {
     assert_eq!(
         tld,
         ToplevelTypeDefinition {
+            jer: Default::default(),
             parameterization: None,
             comments: "Comments".into(),
             name: "InterferenceManagementZones".into(),
@@ -421,6 +423,7 @@ fn parses_parameterized_declaration() {
         .unwrap()
         .1,
         ToplevelTypeDefinition {
+            jer: Default::default(),
             comments: "".into(),
             module_header: None,
             name: "RegionalExtension".into(),
@@ -495,6 +498,7 @@ fn parses_choice() {
         .unwrap()
         .1,
         ToplevelTypeDefinition {
+            jer: Default::default(),
             comments: "".into(),
             module_header: None,
             name: "Choice-example".into(),

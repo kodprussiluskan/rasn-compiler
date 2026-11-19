@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use self::utils::to_jer_identifier;
 use crate::{error::CompilerError, intermediate::*};
 
@@ -7,15 +9,16 @@ use super::{
 };
 
 mod builder;
+mod jer;
 mod template;
 mod utils;
 
 #[derive(Debug, Default)]
 /// A compiler backend that generates typescript type definitions for
 /// ASN.1 data elements encoded using ITU X.697 JSON Encoding Rules
-/// with default encoding instructions
 pub struct Typescript {
     config: Config,
+    types: HashMap<(String, String), ToplevelTypeDefinition>,
 }
 
 #[derive(Debug, Default)]
@@ -28,7 +31,10 @@ impl Backend for Typescript {
     const FILE_EXTENSION: &'static str = ".ts";
 
     fn from_config(config: Self::Config) -> Self {
-        Self { config }
+        Self {
+            config,
+            ..Self::default()
+        }
     }
 
     fn config(&self) -> &Self::Config {
@@ -37,6 +43,37 @@ impl Backend for Typescript {
 
     fn new(config: Self::Config, _: TaggingEnvironment, _: ExtensibilityEnvironment) -> Self {
         Self::from_config(config)
+    }
+
+    fn generate_modules(
+        &mut self,
+        modules: Vec<Vec<ToplevelDefinition>>,
+    ) -> Result<Vec<GeneratedModule>, GeneratorError> {
+        if modules
+            .iter()
+            .flatten()
+            .any(|declaration| matches!(declaration, ToplevelDefinition::Type(ty) if !ty.jer.is_empty()))
+        {
+            self.types = modules
+                .iter()
+                .flatten()
+                .filter_map(|declaration| {
+                    if let ToplevelDefinition::Type(ty) = declaration {
+                        let module = ty
+                            .module_header
+                            .as_ref()
+                            .map(|header| header.borrow().name.clone())
+                            .unwrap_or_default();
+                        Some(((module, ty.name.clone()), ty.clone()))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+        }
+        let generated = modules.into_iter().map(|module| self.generate_module(module)).collect();
+        self.types.clear();
+        generated
     }
 
     fn generate_module(
@@ -109,7 +146,11 @@ impl Backend for Typescript {
                 if t.parameterization.is_some() {
                     return Ok(String::new());
                 }
+                if !t.jer.is_empty() {
+                    return self.generate_with_jer(&t);
+                }
                 match t.ty {
+                    ASN1Type::Jer(_, _) => unreachable!("JER instructions are lowered before generation"),
                     ASN1Type::Null => self.generate_null(t),
                     ASN1Type::Boolean(_) => self.generate_boolean(t),
                     ASN1Type::Integer(_) => self.generate_number_like(t),
@@ -140,6 +181,11 @@ impl Backend for Typescript {
                     }),
                 }
             }
+            ToplevelDefinition::Value(v) if self.value_uses_jer(&v) => Err(GeneratorError::new(
+                Some(ToplevelDefinition::Value(v)),
+                "The TypeScript backend does not generate value constants with JER instructions",
+                GeneratorErrorType::NotYetInplemented,
+            )),
             ToplevelDefinition::Value(v) => self.generate_value(v),
             ToplevelDefinition::Macro(_) => Err(GeneratorError {
                 kind: GeneratorErrorType::NotYetInplemented,

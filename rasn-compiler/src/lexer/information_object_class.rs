@@ -554,6 +554,7 @@ mod tests {
                 .unwrap()
                 .1,
             ToplevelTypeDefinition {
+                jer: Default::default(),
                 comments: "".into(),
                 tag: None,
                 name: "AttributeValue".into(),

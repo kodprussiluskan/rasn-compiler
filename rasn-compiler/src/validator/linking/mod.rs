@@ -1639,6 +1639,7 @@ mod tests {
     macro_rules! tld {
         ($name:literal, $ty:expr) => {
             ToplevelTypeDefinition {
+                jer: Default::default(),
                 comments: String::new(),
                 tag: None,
                 module_header: None,

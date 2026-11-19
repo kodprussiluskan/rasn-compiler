@@ -67,6 +67,7 @@ impl Rasn {
             return Ok(TokenStream::new());
         }
         match tld.ty {
+            ASN1Type::Jer(_, _) => unreachable!("JER instructions are lowered before generation"),
             ASN1Type::Null => self.generate_null(tld),
             ASN1Type::Boolean(_) => self.generate_boolean(tld),
             ASN1Type::Integer(_) => self.generate_integer(tld),
@@ -580,7 +581,11 @@ impl Rasn {
                 })
                 .unwrap_or_default();
             let name = self.to_rust_title_case(&tld.name);
-            let mut annotations = vec![quote!(enumerated), self.format_tag(tld.tag.as_ref())];
+            let mut annotations = vec![
+                quote!(enumerated),
+                self.format_tag(tld.tag.as_ref()),
+                self.format_jer(&tld.jer),
+            ];
             if name.to_string() != tld.name {
                 annotations.push(self.format_identifier_annotation(
                     &tld.name,
@@ -617,7 +622,7 @@ impl Rasn {
                     #[non_exhaustive]}
                 })
                 .unwrap_or_default();
-            let mut annotations = vec![quote!(choice)];
+            let mut annotations = vec![quote!(choice), self.format_jer(&tld.jer)];
 
             // ITU-T X.680 section 31.2.7 clause c:
             // use explicit tagging in IMPLICIT or AUTOMATIC tagging envirnonments when untagged choice is tagged
@@ -759,7 +764,11 @@ impl Rasn {
                 };
                 let formatted_members =
                     self.format_sequence_or_set_members(seq, &name.to_string())?;
-                let mut annotations = vec![set_annotation, self.format_tag(tld.tag.as_ref())];
+                let mut annotations = vec![
+                    set_annotation,
+                    self.format_tag(tld.tag.as_ref()),
+                    self.format_jer(&tld.jer),
+                ];
 
                 // ITU-T X.680 clause 25.3: enable automatic tagging if none of the members are tagged type
                 if self.tagging_environment == TaggingEnvironment::Automatic
@@ -811,6 +820,7 @@ impl Rasn {
         let anonymous_item = match seq_or_set_of.element_type.as_ref() {
             ASN1Type::ElsewhereDeclaredType(_) => None,
             n => Some(self.generate_type(ToplevelTypeDefinition {
+                jer: Default::default(),
                 parameterization: None,
                 comments: format!(
                     " Anonymous {} OF member ",
@@ -831,6 +841,7 @@ impl Rasn {
         };
         let mut annotations = vec![
             quote!(delegate),
+            self.format_jer(&tld.jer),
             self.format_range_annotations(true, &seq_or_set_of.constraints)?,
             self.format_tag(tld.tag.as_ref()),
         ];

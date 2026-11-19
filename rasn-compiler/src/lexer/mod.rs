@@ -11,11 +11,11 @@
 use error::ParserResult;
 use nom::{
     branch::alt,
-    bytes::complete::{tag, take_until},
-    character::complete::{char, multispace1},
-    combinator::{into, map, opt, recognize},
-    multi::{many0, many1},
-    sequence::{delimited, pair, preceded, terminated},
+    bytes::complete::tag,
+    character::complete::{anychar, char, multispace1},
+    combinator::{into, map, opt, peek, recognize, value},
+    multi::{many_till, many0, many1},
+    sequence::{pair, preceded, terminated},
     Parser,
 };
 
@@ -46,6 +46,7 @@ pub(crate) mod error;
 mod external;
 mod information_object_class;
 mod integer;
+mod jer;
 pub(crate) mod macros;
 mod module_header;
 mod null;
@@ -90,34 +91,35 @@ pub fn asn_spec(
 pub(crate) fn asn_module(
     input: Input<'_>,
 ) -> ParserResult<'_, (ModuleHeader, Vec<ToplevelDefinition>)> {
-    pair(
-        module_header::module_header,
-        terminated(
-            many0(skip_ws(alt((
-                map(object_class_assignement, ToplevelDefinition::Class),
-                map(
-                    top_level_information_declaration,
-                    ToplevelDefinition::Object,
-                ),
-                map(top_level_type_declaration, ToplevelDefinition::Type),
-                map(top_level_value_declaration, ToplevelDefinition::Value),
-                map(macro_definition, |m| {
-                    ToplevelDefinition::Macro(ToplevelMacroDefinition::from(m))
-                }),
-            )))),
-            context_boundary(skip_ws_and_comments(alt((end, encoding_control)))),
-        ),
-    )
-    .parse(input)
+    let (input, mut header) = module_header::module_header(input)?;
+    let (input, definitions) = many0(skip_ws(alt((
+        map(object_class_assignement, ToplevelDefinition::Class),
+        map(top_level_information_declaration, ToplevelDefinition::Object),
+        map(top_level_type_declaration, ToplevelDefinition::Type),
+        map(top_level_value_declaration, ToplevelDefinition::Value),
+        map(macro_definition, |m| {
+            ToplevelDefinition::Macro(ToplevelMacroDefinition::from(m))
+        }),
+    ))))
+    .parse(input)?;
+    let (input, sections) = many0(alt((map(jer::control, Some), value(None, other_encoding_control)))).parse(input)?;
+    header.jer = sections.into_iter().flatten().flatten().collect();
+    let (input, _) = context_boundary(end).parse(input)?;
+    Ok((input, (header, definitions)))
 }
 
-fn encoding_control(input: Input<'_>) -> ParserResult<'_, &str> {
-    into_inner(delimited(
-        skip_ws_and_comments(tag(ENCODING_CONTROL)),
-        take_until(END),
-        end,
-    ))
-    .parse(input)
+fn other_encoding_control(input: Input<'_>) -> ParserResult<'_, ()> {
+    let (input, _) = jer::keyword(ENCODING_CONTROL).parse(input)?;
+    let (input, _) = many_till(
+        alt((
+            value((), comment),
+            value((), character_string::raw_string_literal),
+            value((), anychar),
+        )),
+        peek(alt((jer::keyword(ENCODING_CONTROL), jer::keyword(END)))),
+    )
+    .parse(input)?;
+    Ok((input, ()))
 }
 
 fn end(input: Input<'_>) -> ParserResult<'_, &str> {
@@ -133,7 +135,7 @@ pub fn top_level_type_declaration(input: Input<'_>) -> ParserResult<'_, Toplevel
         skip_ws(many0(comment)),
         skip_ws(type_reference),
         opt(parameterization),
-        preceded(assignment, pair(opt(asn_tag), asn1_type)),
+        preceded(assignment, tagged_type),
     ))
     .parse(input)
 }
@@ -148,7 +150,33 @@ pub fn top_level_information_declaration(
     .parse(input)
 }
 
+fn tagged_type(input: Input<'_>) -> ParserResult<'_, (Option<AsnTag>, ASN1Type)> {
+    let (input, mut prefixes) = many0(jer::prefix).parse(input)?;
+    let (input, tag) = opt(asn_tag).parse(input)?;
+    let (input, ty) = asn1_type(input)?;
+    let ty = match ty {
+        ASN1Type::Jer(inner_prefixes, inner) if !prefixes.is_empty() => {
+            prefixes.extend(inner_prefixes);
+            ASN1Type::Jer(prefixes, inner)
+        }
+        ty if !prefixes.is_empty() => ASN1Type::Jer(prefixes, Box::new(ty)),
+        ty => ty,
+    };
+    Ok((input, (tag, ty)))
+}
+
 pub fn asn1_type(input: Input<'_>) -> ParserResult<'_, ASN1Type> {
+    let (input, prefixes) = many0(jer::prefix).parse(input)?;
+    let (input, ty) = asn1_type_inner(input)?;
+    let ty = if prefixes.is_empty() {
+        ty
+    } else {
+        ASN1Type::Jer(prefixes, Box::new(ty))
+    };
+    Ok((input, ty))
+}
+
+fn asn1_type_inner(input: Input<'_>) -> ParserResult<'_, ASN1Type> {
     alt((
         alt((
             null,
