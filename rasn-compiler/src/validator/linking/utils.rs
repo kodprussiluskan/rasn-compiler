@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use super::Scope;
 
 use crate::{
     intermediate::{
@@ -9,22 +9,22 @@ use crate::{
     lexer::asn1_value,
 };
 
-pub(crate) fn find_tld_or_enum_value_by_name(
+pub(in crate::validator) fn find_tld_or_enum_value_by_name(
     type_name: &String,
     name: &String,
-    tlds: &BTreeMap<String, ToplevelDefinition>,
+    tlds: &Scope<'_>,
 ) -> Option<ASN1Value> {
     if let Some(ToplevelDefinition::Value(v)) = tlds.get(name) {
         return Some(v.value.clone());
     } else {
-        for (_, tld) in tlds.iter() {
+        for tld in tlds.visible_definitions() {
             if let Some(value) = tld.get_distinguished_or_enum_value(Some(type_name), name) {
                 return Some(value);
             }
         }
         // Make second attempt without requiring a matching type name
         // This is the current best shot at linking inner subtypes
-        for (_, tld) in tlds.iter() {
+        for tld in tlds.visible_definitions() {
             if let Some(value) = tld.get_distinguished_or_enum_value(None, name) {
                 return Some(value);
             }

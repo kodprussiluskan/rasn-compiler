@@ -93,6 +93,8 @@ impl Backend for Typescript {
                     for usage in &import.types {
                         if !usage.contains("{}")
                             && !usage.chars().all(|c| c.is_uppercase() || c == '-')
+                            && !module.has_conflicting_import(usage)
+                            && !tlds.iter().any(|definition| definition.name() == usage)
                         {
                             let jer_identifier = to_jer_identifier(usage);
                             usages.push(format!(

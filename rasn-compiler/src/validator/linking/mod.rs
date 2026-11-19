@@ -1,6 +1,8 @@
 //! The `linking` module contains methods to link different tokens of the parsed AST
 //! in order to generate correct rust representations.
 
+use super::Scope;
+
 mod constraints;
 mod information_object;
 mod types;
@@ -112,22 +114,6 @@ impl ToplevelDefinition {
         }
     }
 
-    /// Checks if at any depth down the arbitrarily nested `self`, an elsewhere declared type with the name `name` exists.
-    /// Sequence Ofs and Set Ofs break the recursion tree, because they use heap-based data structures.
-    pub fn recurses(
-        &self,
-        name: &str,
-        tlds: &BTreeMap<String, ToplevelDefinition>,
-        reference_graph: Vec<&str>,
-    ) -> bool {
-        match self {
-            ToplevelDefinition::Type(ToplevelTypeDefinition { ty, .. }) => {
-                ty.recurses(name, tlds, reference_graph)
-            }
-            _ => false, // TODO: Check recursion for values and information objects
-        }
-    }
-
     /// Traverses a top-level declaration to check for references to other top-level declarations
     /// in a constraint. An example would be the constraint of the `intercontinental` field in the
     /// following example.
@@ -181,9 +167,9 @@ impl ToplevelDefinition {
     /// ### Params
     ///  * `tlds` - vector of other top-level declarations that will be searched as the method resolves a reference
     ///    returns `true` if the reference was resolved successfully.
-    pub fn link_constraint_reference(
+    pub(in crate::validator) fn link_constraint_reference(
         &mut self,
-        tlds: &BTreeMap<String, ToplevelDefinition>,
+        tlds: &Scope<'_>,
     ) -> Result<bool, GrammarError> {
         match self {
             ToplevelDefinition::Type(t) => {
@@ -198,9 +184,9 @@ impl ToplevelDefinition {
     }
 
     /// Traverses top-level declarations and marks recursive types
-    pub fn mark_recursive(
+    pub(in crate::validator) fn mark_recursive(
         &mut self,
-        tlds: &BTreeMap<String, ToplevelDefinition>,
+        tlds: &Scope<'_>,
     ) -> Result<(), GrammarError> {
         match self {
             ToplevelDefinition::Type(t) => {
@@ -215,9 +201,9 @@ impl ToplevelDefinition {
     }
 
     /// Collects supertypes of ASN1 values.
-    pub fn collect_supertypes(
+    pub(in crate::validator) fn collect_supertypes(
         &mut self,
-        tlds: &BTreeMap<String, ToplevelDefinition>,
+        tlds: &Scope<'_>,
     ) -> Result<(), GrammarError> {
         match self {
             ToplevelDefinition::Type(t) => t.ty.collect_supertypes(tlds),
@@ -241,17 +227,18 @@ impl ToplevelValueDefinition {
     /// exampleValue ExampleType ::= 6
     /// ```
     /// The supertypes are recorded in a `LinkedASN1Value`
-    pub fn collect_supertypes(
+    pub(in crate::validator) fn collect_supertypes(
         &mut self,
-        tlds: &BTreeMap<String, ToplevelDefinition>,
+        tlds: &Scope<'_>,
     ) -> Result<(), GrammarError> {
-        if let Some(ToplevelDefinition::Type(tld)) =
-            tlds.get(self.associated_type.as_str().as_ref())
-        {
-            self.value.link_with_type(tlds, &tld.ty, Some(&tld.name))
-        } else {
-            self.value.link_with_type(tlds, &self.associated_type, None)
+        if let ASN1Type::ElsewhereDeclaredType(reference) = &self.associated_type {
+            reference.check_ambiguity(tlds)?;
+            if let Some(ToplevelDefinition::Type(tld)) = tlds.get_type(reference) {
+                let scope = tlds.for_value_type(tld.module_header.as_ref());
+                return self.value.link_with_type(&scope, &tld.ty, Some(&tld.name));
+            }
         }
+        self.value.link_with_type(tlds, &self.associated_type, None)
     }
 }
 
@@ -259,9 +246,9 @@ impl ASN1Type {
     /// Collects supertypes of ASN1 values.
     /// In `ToplevelTypeDefinition`s, values will appear only as `DEFAULT`
     /// values in `SET`s or `SEQUENCE`s.
-    pub fn collect_supertypes(
+    pub(in crate::validator) fn collect_supertypes(
         &mut self,
-        tlds: &BTreeMap<String, ToplevelDefinition>,
+        tlds: &Scope<'_>,
     ) -> Result<(), GrammarError> {
         match self {
             ASN1Type::Set(ref mut s) | ASN1Type::Sequence(ref mut s) => {
@@ -277,6 +264,9 @@ impl ASN1Type {
                 .options
                 .iter_mut()
                 .try_for_each(|o| o.ty.collect_supertypes(tlds)),
+            ASN1Type::SequenceOf(s) | ASN1Type::SetOf(s) => s.element_type.collect_supertypes(tlds),
+            ASN1Type::Jer(_, ty) => ty.collect_supertypes(tlds),
+            ASN1Type::ElsewhereDeclaredType(reference) => reference.check_ambiguity(tlds),
             _ => Ok(()),
         }
     }
@@ -295,9 +285,9 @@ impl ASN1Type {
         }
     }
 
-    pub fn link_choice_selection_type(
+    pub(in crate::validator) fn link_choice_selection_type(
         &mut self,
-        tlds: &BTreeMap<String, ToplevelDefinition>,
+        tlds: &Scope<'_>,
     ) -> Result<(), GrammarError> {
         match self {
             ASN1Type::ChoiceSelectionType(c) => {
@@ -344,9 +334,9 @@ impl ASN1Type {
         }
     }
 
-    pub fn link_components_of_notation(
+    pub(in crate::validator) fn link_components_of_notation(
         &mut self,
-        tlds: &BTreeMap<String, ToplevelDefinition>,
+        tlds: &Scope<'_>,
     ) -> bool {
         match self {
             ASN1Type::Choice(c) => c
@@ -386,10 +376,10 @@ impl ASN1Type {
         }
     }
 
-    pub fn link_constraint_reference(
+    pub(in crate::validator) fn link_constraint_reference(
         &mut self,
         name: &String,
-        tlds: &BTreeMap<String, ToplevelDefinition>,
+        tlds: &Scope<'_>,
     ) -> Result<Option<ASN1Type>, GrammarError> {
         let mut self_replacement = None;
         match self {
@@ -435,8 +425,7 @@ impl ASN1Type {
                     .find(|c| matches![c, Constraint::Parameter(_)])
                 {
                     self_replacement = Some(Self::resolve_parameters(
-                        &e.identifier,
-                        e.parent.as_ref(),
+                        e,
                         tlds,
                         args,
                     )?);
@@ -467,20 +456,21 @@ impl ASN1Type {
         Ok(self_replacement)
     }
 
-    pub(crate) fn resolve_parameters(
-        identifier: &String,
-        _parent: Option<&String>,
-        tlds: &BTreeMap<String, ToplevelDefinition>,
+    pub(in crate::validator) fn resolve_parameters(
+        reference: &DeclarationElsewhere,
+        tlds: &Scope<'_>,
         args: &[Parameter],
     ) -> Result<ASN1Type, GrammarError> {
-        match tlds.get(identifier) {
+        let identifier = &reference.identifier;
+        match tlds.get_type(reference) {
             Some(ToplevelDefinition::Type(ToplevelTypeDefinition {
                 ty,
+                module_header,
                 parameterization: Some(Parameterization { parameters }),
                 ..
             })) => {
                 let mut impl_template = ty.clone();
-                let mut impl_tlds = tlds.clone();
+                let mut arguments = BTreeMap::new();
                 let mut table_constraint_replacements = BTreeMap::new();
                 for (
                     index,
@@ -493,7 +483,7 @@ impl ASN1Type {
                     let arg = args.get(index).ok_or_else(|| grammar_error!(LinkerError, "Did not find an argument for parameter {dummy_reference} of {identifier}"))?;
                     match (arg, param_governor) {
                         (Parameter::ValueParameter(v), ParameterGovernor::TypeOrClass(gov)) => {
-                            impl_tlds.insert(
+                            arguments.insert(
                                 dummy_reference.clone(),
                                 ToplevelDefinition::Value(ToplevelValueDefinition::from((
                                     dummy_reference.as_str(),
@@ -503,7 +493,7 @@ impl ASN1Type {
                             );
                         }
                         (Parameter::TypeParameter(t), _) => {
-                            impl_tlds.insert(
+                            arguments.insert(
                                 dummy_reference.clone(),
                                 ToplevelDefinition::Type(ToplevelTypeDefinition::from((
                                     dummy_reference.as_str(),
@@ -527,8 +517,8 @@ impl ASN1Type {
                                 info,
                                 c.as_str(),
                             ));
-                            tld = tld.resolve_class_reference(tlds);
-                            impl_tlds
+                            tld.resolve_class_reference(tlds);
+                            arguments
                                 .insert(dummy_reference.clone(), ToplevelDefinition::Object(tld));
                         }
                         _ => {
@@ -539,6 +529,8 @@ impl ASN1Type {
                         }
                     }
                 }
+                let template_scope = tlds.for_definition(module_header.as_ref());
+                let impl_tlds = template_scope.with_parameters(&arguments);
                 impl_template.link_elsewhere_declared(&impl_tlds)?;
                 if let Some(replacement) =
                     impl_template.link_constraint_reference(identifier, &impl_tlds)?
@@ -547,7 +539,7 @@ impl ASN1Type {
                 };
                 impl_template
                     .collect_supertypes(&impl_tlds)
-                    .or_else(|_| impl_template.collect_supertypes(tlds))?;
+                    .or_else(|_| impl_template.collect_supertypes(&template_scope))?;
                 for (dummy_reference, osv) in table_constraint_replacements {
                     impl_template.reassign_table_constraint(dummy_reference, osv)?;
                 }
@@ -564,46 +556,54 @@ impl ASN1Type {
     /// Sequence Ofs and Set Ofs break the recursion tree, because they use heap-based data structures.
     /// The `reference_graph` serves to detect circular references in the recursion tree. If a circular reference is detected,
     /// recursion detection is stopped. The circular reference will be marked recursive once the respective type is captured mutably in `mark_recursive`.
-    pub fn recurses(
+    fn recurses<'a>(
         &self,
-        name: &str,
-        tlds: &BTreeMap<String, ToplevelDefinition>,
-        mut reference_graph: Vec<&str>,
+        target: (&str, &str),
+        tlds: &Scope<'a>,
+        mut reference_graph: Vec<(&'a str, &'a str)>,
     ) -> bool {
         match self {
-            ASN1Type::ElsewhereDeclaredType(DeclarationElsewhere { identifier, .. }) => {
-                !reference_graph.contains(&identifier.as_str())
-                    && (identifier == name
-                        || tlds.get(identifier).is_some_and(|tld| {
-                            reference_graph.push(identifier);
-                            tld.recurses(name, tlds, reference_graph)
-                        }))
+            ASN1Type::ElsewhereDeclaredType(reference) => {
+                let Some(module) = tlds.reference_module(reference.module.as_deref(), &reference.identifier) else {
+                    return false;
+                };
+                if (module, reference.identifier.as_str()) == target {
+                    return true;
+                }
+                if let Some(ToplevelDefinition::Type(tld)) = tlds.get_type(reference) {
+                    let key = (module, tld.name.as_str());
+                    if !reference_graph.contains(&key) {
+                        reference_graph.push(key);
+                        return tld.ty.recurses(target, &tlds.for_definition(tld.module_header.as_ref()), reference_graph);
+                    }
+                }
+                false
             }
             ASN1Type::Choice(c) => c.options.iter().any(|opt|
                     // if an option is already marked recursive,
                     // it will be boxed and constitute a recursion
                     // boundary between `self` and the option type
-                    !opt.is_recursive && opt.ty.recurses(name, tlds, reference_graph.clone())),
+                    !opt.is_recursive && opt.ty.recurses(target, tlds, reference_graph.clone())),
             ASN1Type::Sequence(s) | ASN1Type::Set(s) => s.members.iter().any(|m|
                     // if a member is already marked recursive,
                     // it will be boxed and thus constitutes a recursion
                     // boundary between `self` and the member type
-                    !m.is_recursive && m.ty.recurses(name, tlds, reference_graph.clone())),
+                    !m.is_recursive && m.ty.recurses(target, tlds, reference_graph.clone())),
             _ => false,
         }
     }
 
     /// Traverses type and marks if recursive. Returns a vector of traversed type IDs since the last recursion detection or the leaf type.
-    pub fn mark_recursive(
+    pub(in crate::validator) fn mark_recursive(
         &mut self,
         name: &str,
-        tlds: &BTreeMap<String, ToplevelDefinition>,
+        tlds: &Scope<'_>,
     ) -> Result<Vec<Cow<'_, str>>, GrammarError> {
         match self {
             ASN1Type::Choice(choice) => {
                 let mut children = Vec::new();
                 for option in &mut choice.options {
-                    option.is_recursive = option.ty.recurses(name, tlds, Vec::new());
+                    option.is_recursive = option.ty.recurses((tlds.module, name), tlds, Vec::new());
                     let opt_ty_name = option.ty.as_str().into_owned();
                     let mut opt_children = option.ty.mark_recursive(&opt_ty_name, tlds)?;
                     if opt_children.iter().any(|id: &Cow<'_, str>| id == name) {
@@ -617,7 +617,7 @@ impl ASN1Type {
             ASN1Type::Set(s) | ASN1Type::Sequence(s) => {
                 let mut children = Vec::new();
                 for member in &mut s.members {
-                    member.is_recursive = member.ty.recurses(name, tlds, Vec::new());
+                    member.is_recursive = member.ty.recurses((tlds.module, name), tlds, Vec::new());
                     let mem_ty_name = member.ty.as_str().into_owned();
                     let mut mem_children = member.ty.mark_recursive(&mem_ty_name, tlds)?;
                     if mem_children.iter().any(|id: &Cow<'_, str>| id == name) {
@@ -635,6 +635,11 @@ impl ASN1Type {
                 "Choice selection types should be resolved by now"
             )),
             ASN1Type::ObjectClassField(_object_class_field_type) => Ok(Vec::new()), // TODO
+            ASN1Type::ElsewhereDeclaredType(reference)
+                if tlds.reference_module(reference.module.as_deref(), &reference.identifier) != Some(tlds.module) =>
+            {
+                Ok(Vec::new())
+            }
             n => Ok(vec![n.as_str()]),
         }
     }
@@ -698,7 +703,7 @@ impl ASN1Type {
 
     fn link_elsewhere_declared(
         &mut self,
-        tlds: &BTreeMap<String, ToplevelDefinition>,
+        tlds: &Scope<'_>,
     ) -> Result<(), GrammarError> {
         match self {
             ASN1Type::Choice(c) => c
@@ -713,7 +718,7 @@ impl ASN1Type {
                 s.element_type.link_elsewhere_declared(tlds)
             }
             ASN1Type::ElsewhereDeclaredType(e) => {
-                if let Some(ToplevelDefinition::Type(tld)) = tlds.get(&e.identifier) {
+                if let Some(ToplevelDefinition::Type(tld)) = tlds.get_type(e) {
                     *self = tld.ty.clone();
                     Ok(())
                 } else {
@@ -805,7 +810,7 @@ impl ASN1Type {
         }
     }
 
-    pub fn resolve_class_reference(self, tlds: &BTreeMap<String, ToplevelDefinition>) -> Self {
+    pub(in crate::validator) fn resolve_class_reference(self, tlds: &Scope<'_>) -> Self {
         match self {
             ASN1Type::Choice(c) => ASN1Type::Choice(Choice {
                 extensible: c.extensible,
@@ -841,16 +846,13 @@ impl ASN1Type {
         }
     }
 
-    fn reassign_type_for_ref(mut self, tlds: &BTreeMap<String, ToplevelDefinition>) -> Self {
+    fn reassign_type_for_ref(mut self, tlds: &Scope<'_>) -> Self {
         if let Self::ObjectClassField(ref ocf) = self {
             if let Some(t) = tlds
-                .iter()
-                .find_map(|(_, c)| {
-                    c.is_class_with_name(&ocf.class)
-                        .map(|clazz| clazz.get_field(&ocf.field_path))
-                })
-                .flatten()
-                .and_then(|class_field| class_field.ty.clone())
+                .get(&ocf.class)
+                .and_then(|class| class.is_class_with_name(&ocf.class))
+                .and_then(|class| class.get_field(&ocf.field_path))
+                .and_then(|field| field.ty.clone())
             {
                 self = t;
             }
@@ -858,12 +860,12 @@ impl ASN1Type {
         self
     }
 
-    pub fn link_subtype_constraint(
+    pub(in crate::validator) fn link_subtype_constraint(
         &mut self,
-        tlds: &BTreeMap<String, ToplevelDefinition>,
+        tlds: &Scope<'_>,
     ) -> Result<(), GrammarError> {
         if let Self::ElsewhereDeclaredType(e) = self {
-            if let Some(ToplevelDefinition::Type(t)) = tlds.get(&e.identifier) {
+            if let Some(ToplevelDefinition::Type(t)) = tlds.get_type(e) {
                 *self = t.ty.clone();
             }
         }
@@ -872,9 +874,9 @@ impl ASN1Type {
 }
 
 impl ASN1Value {
-    pub fn link_with_type(
+    pub(in crate::validator) fn link_with_type(
         &mut self,
-        tlds: &BTreeMap<String, ToplevelDefinition>,
+        tlds: &Scope<'_>,
         ty: &ASN1Type,
         type_name: Option<&String>,
     ) -> Result<(), GrammarError> {
@@ -891,8 +893,8 @@ impl ASN1Value {
                     });
                     *integer_type = int_type;
                 }
-                if let Some(ToplevelDefinition::Type(t)) = tlds.get(&e.identifier) {
-                    self.link_with_type(tlds, &t.ty, Some(&t.name))
+                if let Some(ToplevelDefinition::Type(t)) = tlds.get_type(e) {
+                    self.link_with_type(&tlds.for_value_type(t.module_header.as_ref()), &t.ty, Some(&t.name))
                 } else {
                     Err(grammar_error!(
                         LinkerError,
@@ -904,7 +906,7 @@ impl ASN1Value {
             (
                 ASN1Type::ElsewhereDeclaredType(e),
                 ASN1Value::ElsewhereDeclaredValue {
-                    module: _,
+                    module,
                     identifier,
                     parent,
                 },
@@ -917,10 +919,16 @@ impl ASN1Value {
                 )? {
                     *self = value;
                     return Ok(());
-                } else if let Some((ToplevelDefinition::Type(ty), ToplevelDefinition::Value(val))) =
-                    tlds.get(&e.identifier).zip(tlds.get(identifier))
+                } else if let Some((ty @ ToplevelDefinition::Type(_), ToplevelDefinition::Value(val))) =
+                    tlds.get_type(e).zip(tlds.value_scope().get_qualified(module.as_deref(), identifier))
                 {
-                    if ty.name != val.associated_type.as_str() {
+                    let value_type = match &val.associated_type {
+                        ASN1Type::ElsewhereDeclaredType(reference) => tlds
+                            .for_definition(val.module_header.as_ref())
+                            .get_type(reference),
+                        _ => None,
+                    };
+                    if !value_type.is_some_and(|value_type| std::ptr::eq(ty, value_type)) {
                         // When it comes to `DEFAULT` values, the ASN.1 type system
                         // is more lenient than Rust's. For example, the it is acceptable
                         // to pass `int-value` as a `DEFAULT` value for `Int-Like-Type` in
@@ -954,8 +962,8 @@ impl ASN1Value {
                     supertypes: vec![e.identifier.clone()],
                     value: Box::new((*val).clone()),
                 };
-                if let Some(ToplevelDefinition::Type(t)) = tlds.get(&e.identifier) {
-                    self.link_with_type(tlds, &t.ty, Some(&t.name))
+                if let Some(ToplevelDefinition::Type(t)) = tlds.get_type(e) {
+                    self.link_with_type(&tlds.for_value_type(t.module_header.as_ref()), &t.ty, Some(&t.name))
                 } else {
                     Err(grammar_error!(
                         LinkerError,
@@ -1293,9 +1301,7 @@ impl ASN1Value {
                 if matches![**value, ASN1Value::ElsewhereDeclaredValue { .. }] =>
             {
                 if let ASN1Value::ElsewhereDeclaredValue { identifier, .. } = &**value {
-                    if let Some((_, tld)) = tlds
-                        .iter()
-                        .find(|(_, tld)| tld.has_enum_value(None, identifier))
+                    if let Some(tld) = tlds.visible_definitions().find(|tld| tld.has_enum_value(None, identifier))
                     {
                         **value = ASN1Value::EnumeratedValue {
                             enumerated: tld.name().clone(),
@@ -1306,9 +1312,7 @@ impl ASN1Value {
                 Ok(())
             }
             (ASN1Type::Enumerated(_), ASN1Value::ElsewhereDeclaredValue { identifier, .. }) => {
-                if let Some((_, tld)) = tlds
-                    .iter()
-                    .find(|(_, tld)| tld.has_enum_value(None, identifier))
+                if let Some(tld) = tlds.visible_definitions().find(|tld| tld.has_enum_value(None, identifier))
                 {
                     *self = ASN1Value::EnumeratedValue {
                         enumerated: tld.name().clone(),
@@ -1320,12 +1324,14 @@ impl ASN1Value {
             (
                 _,
                 ASN1Value::ElsewhereDeclaredValue {
-                    module: None,
+                    module,
                     parent: None,
                     identifier,
                 },
             ) => {
-                if let Some(ToplevelDefinition::Value(tld)) = tlds.get(identifier) {
+                if let Some(ToplevelDefinition::Value(tld)) =
+                    tlds.value_scope().get_qualified(module.as_deref(), identifier)
+                {
                     *self = tld.value.clone();
                     self.link_with_type(tlds, ty, type_name)?;
                 }
@@ -1337,12 +1343,12 @@ impl ASN1Value {
     }
 
     fn link_enum_or_distinguished(
-        tlds: &BTreeMap<String, ToplevelDefinition>,
+        tlds: &Scope<'_>,
         e: &DeclarationElsewhere,
         identifier: &mut String,
         mut supertypes: Vec<String>,
     ) -> Result<Option<ASN1Value>, GrammarError> {
-        match tlds.get(&e.identifier) {
+        match tlds.get_type(e) {
             Some(ToplevelDefinition::Type(ToplevelTypeDefinition {
                 ty: ASN1Type::Enumerated(enumerated),
                 ..
@@ -1388,10 +1394,11 @@ impl ASN1Value {
             }
             Some(ToplevelDefinition::Type(ToplevelTypeDefinition {
                 ty: ASN1Type::ElsewhereDeclaredType(elsewhere),
+                module_header,
                 ..
             })) => {
                 supertypes.push(elsewhere.identifier.clone());
-                Self::link_enum_or_distinguished(tlds, elsewhere, identifier, supertypes)
+                Self::link_enum_or_distinguished(&tlds.for_definition(module_header.as_ref()), elsewhere, identifier, supertypes)
             }
             _ => Ok(None),
         }
@@ -1400,7 +1407,7 @@ impl ASN1Value {
     fn link_array_like(
         val: &mut [(Option<String>, Box<ASN1Value>)],
         s: &SequenceOrSetOf,
-        tlds: &BTreeMap<String, ToplevelDefinition>,
+        tlds: &Scope<'_>,
     ) -> Result<ASN1Value, GrammarError> {
         let _ = val.iter_mut().try_for_each(|v| {
             v.1.link_with_type(
@@ -1417,7 +1424,7 @@ impl ASN1Value {
     fn link_struct_like(
         val: &mut [(Option<String>, Box<ASN1Value>)],
         s: &SequenceOrSet,
-        tlds: &BTreeMap<String, ToplevelDefinition>,
+        tlds: &Scope<'_>,
         type_name: Option<&String>,
     ) -> Result<ASN1Value, GrammarError> {
         val.iter_mut().try_for_each(|v| {
@@ -1492,9 +1499,9 @@ impl ASN1Value {
     /// }
     /// ```
     /// The `LDAP-SYNTAX` field refers to a field ob an information object `dn`.
-    pub fn resolve_elsewhere_with_parent(
+    pub(in crate::validator) fn resolve_elsewhere_with_parent(
         &mut self,
-        tlds: &BTreeMap<String, ToplevelDefinition>,
+        tlds: &Scope<'_>,
     ) -> Result<(), GrammarError> {
         if let Self::ElsewhereDeclaredValue {
             module: None,
@@ -1583,10 +1590,10 @@ impl ASN1Value {
         Ok(())
     }
 
-    pub fn link_elsewhere_declared(
+    pub(in crate::validator) fn link_elsewhere_declared(
         &mut self,
         identifier: &String,
-        tlds: &BTreeMap<String, ToplevelDefinition>,
+        tlds: &Scope<'_>,
     ) -> Result<(), GrammarError> {
         match self {
             Self::ElsewhereDeclaredValue {
@@ -1716,7 +1723,11 @@ mod tests {
                 inner_value: Box::new(ASN1Value::Boolean(true)),
             },
         };
-        example_value.collect_supertypes(&tlds).unwrap();
+        let modules = BTreeMap::from([(String::new(), crate::validator::Module {
+            definitions: tlds,
+            ..Default::default()
+        })]);
+        example_value.collect_supertypes(&super::Scope::new(&modules, "")).unwrap();
         assert_eq!(
             example_value,
             ToplevelValueDefinition {

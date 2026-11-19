@@ -37,7 +37,13 @@ pub fn type_to_tokens(ty: &ASN1Type) -> String {
         ASN1Type::Choice(c) => format_choice_options(c),
         ASN1Type::Set(se) | ASN1Type::Sequence(se) => format_sequence_or_set_members(se),
         ASN1Type::SetOf(s) | ASN1Type::SequenceOf(s) => type_to_tokens(&s.element_type) + "[]",
-        ASN1Type::ElsewhereDeclaredType(e) => to_jer_identifier(&e.identifier),
+        ASN1Type::ElsewhereDeclaredType(e) => {
+            let identifier = to_jer_identifier(&e.identifier);
+            match &e.module {
+                Some(module) => format!("{}.{identifier}", to_jer_identifier(module)),
+                None => identifier,
+            }
+        }
         _ => String::from("any"),
     }
 }

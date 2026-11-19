@@ -10,11 +10,11 @@ impl Typescript {
         &self,
         tld: ToplevelTypeDefinition,
     ) -> Result<String, GeneratorError> {
-        if let ASN1Type::ElsewhereDeclaredType(dec) = &tld.ty {
+        if matches!(&tld.ty, ASN1Type::ElsewhereDeclaredType(_)) {
             Ok(typealias_template(
                 &format_comments(&tld.comments),
                 &to_jer_identifier(&tld.name),
-                &to_jer_identifier(&dec.identifier),
+                &type_to_tokens(&tld.ty),
             ))
         } else {
             Err(GeneratorError::new(

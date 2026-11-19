@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use super::Scope;
 
 use crate::intermediate::{information_object::*, *};
 
@@ -8,21 +8,20 @@ use super::{
 };
 
 impl ToplevelInformationDefinition {
-    pub fn resolve_class_reference(mut self, tlds: &BTreeMap<String, ToplevelDefinition>) -> Self {
+    pub(in crate::validator) fn resolve_class_reference(&mut self, tlds: &Scope<'_>) {
         if let ClassLink::ByName(name) = &self.class {
             if let Some(ToplevelDefinition::Class(c)) = tlds.get(name) {
                 self.class = ClassLink::ByReference(c.definition.clone());
             }
         }
-        self
     }
 
     /// Collects supertypes of ASN1 values.
     /// In `ToplevelTypeDefinition`s, values will appear only as `DEFAULT`
     /// values in `SET`s or `SEQUENCE`s.
-    pub fn collect_supertypes(
+    pub(in crate::validator) fn collect_supertypes(
         &mut self,
-        tlds: &BTreeMap<String, ToplevelDefinition>,
+        tlds: &Scope<'_>,
     ) -> Result<(), GrammarError> {
         match (&mut self.value, &self.class) {
             (ASN1Information::Object(ref mut o), ClassLink::ByReference(class)) => {
@@ -63,7 +62,7 @@ impl ToplevelInformationDefinition {
 fn resolve_and_link(
     fields: &mut InformationObjectFields,
     class: &ObjectClassDefn,
-    tlds: &BTreeMap<String, ToplevelDefinition>,
+    tlds: &Scope<'_>,
 ) -> Result<Option<ToplevelInformationDefinition>, GrammarError> {
     match resolve_custom_syntax(fields, class) {
         Ok(()) => link_object_fields(fields, class, tlds).map(|_| None),
@@ -76,8 +75,10 @@ fn resolve_and_link(
             if let InformationObjectFields::CustomSyntax(c) = &fields {
                 if let Some(id) = c.first().and_then(SyntaxApplication::as_str_or_none) {
                     if let Some(ToplevelDefinition::Object(tld)) = tlds.get(id) {
-                        let mut tld_clone = tld.clone().resolve_class_reference(tlds);
-                        tld_clone.collect_supertypes(tlds)?;
+                        let mut tld_clone = tld.clone();
+                        let scope = tlds.for_definition(tld.module_header.as_ref());
+                        tld_clone.resolve_class_reference(&scope);
+                        tld_clone.collect_supertypes(&scope)?;
                         return Ok(Some(tld_clone));
                     }
                 }
@@ -91,7 +92,7 @@ fn resolve_and_link(
 fn link_object_fields(
     fields: &mut InformationObjectFields,
     class: &ObjectClassDefn,
-    tlds: &BTreeMap<String, ToplevelDefinition>,
+    tlds: &Scope<'_>,
 ) -> Result<(), GrammarError> {
     match fields {
         InformationObjectFields::DefaultSyntax(ref mut fields) => {
@@ -134,9 +135,9 @@ fn link_object_fields(
 }
 
 impl ASN1Information {
-    pub fn link_object_set_reference(
+    pub(in crate::validator) fn link_object_set_reference(
         &mut self,
-        tlds: &BTreeMap<String, ToplevelDefinition>,
+        tlds: &Scope<'_>,
     ) -> bool {
         match self {
             ASN1Information::ObjectSet(s) => s.link_object_set_reference(tlds),
@@ -153,9 +154,9 @@ impl ASN1Information {
 }
 
 impl SyntaxApplication {
-    pub fn link_object_set_reference(
+    pub(in crate::validator) fn link_object_set_reference(
         &mut self,
-        tlds: &BTreeMap<String, ToplevelDefinition>,
+        tlds: &Scope<'_>,
     ) -> bool {
         match self {
             SyntaxApplication::ObjectSetDeclaration(o) => o.link_object_set_reference(tlds),
@@ -181,9 +182,9 @@ impl ObjectClassDefn {
 }
 
 impl InformationObject {
-    pub fn link_object_set_reference(
+    pub(in crate::validator) fn link_object_set_reference(
         &mut self,
-        tlds: &BTreeMap<String, ToplevelDefinition>,
+        tlds: &Scope<'_>,
     ) -> bool {
         match &mut self.fields {
             InformationObjectFields::DefaultSyntax(d) => d
@@ -208,9 +209,9 @@ impl InformationObject {
 }
 
 impl ObjectSetValue {
-    pub fn link_object_set_reference(
+    pub(in crate::validator) fn link_object_set_reference(
         &mut self,
-        tlds: &BTreeMap<String, ToplevelDefinition>,
+        tlds: &Scope<'_>,
     ) -> Option<Vec<ObjectSetValue>> {
         match self {
             ObjectSetValue::Reference(id) => match tlds.get(id) {
@@ -254,9 +255,9 @@ impl ObjectSetValue {
 }
 
 impl ObjectSet {
-    pub fn link_object_set_reference(
+    pub(in crate::validator) fn link_object_set_reference(
         &mut self,
-        tlds: &BTreeMap<String, ToplevelDefinition>,
+        tlds: &Scope<'_>,
     ) -> bool {
         let mut flattened: Vec<_> = self
             .values
@@ -273,9 +274,9 @@ impl ObjectSet {
             .any(|val| val.references_object_set_by_name())
     }
 
-    pub fn resolve_object_set_references(
+    pub(in crate::validator) fn resolve_object_set_references(
         &mut self,
-        tlds: &BTreeMap<String, ToplevelDefinition>,
+        tlds: &Scope<'_>,
     ) -> Result<(), GrammarError> {
         let mut flattened_members = Vec::new();
         let mut needs_recursing = false;
@@ -316,9 +317,9 @@ impl ObjectSet {
 }
 
 impl InformationObjectField {
-    pub fn link_object_set_reference(
+    pub(in crate::validator) fn link_object_set_reference(
         &mut self,
-        tlds: &BTreeMap<String, ToplevelDefinition>,
+        tlds: &Scope<'_>,
     ) -> bool {
         match self {
             InformationObjectField::ObjectSetField(ObjectSetField { value, .. }) => {

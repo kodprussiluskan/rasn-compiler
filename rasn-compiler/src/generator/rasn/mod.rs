@@ -242,7 +242,7 @@ impl Rasn {
                 })?;
             self.copy_module = Some(module.clone());
             let imports = module.imports.iter().map(|import| {
-                let module =
+                let import_module =
                     self.to_rust_snake_case(&import.global_module_reference.module_reference);
                 let used_imports = if self.uses_wildcard_import(import) {
                     vec![quote!(*)]
@@ -251,6 +251,11 @@ impl Rasn {
                         .types
                         .iter()
                         .filter_map(|usage| {
+                            if module.has_conflicting_import(usage)
+                                || tlds.iter().any(|definition| definition.name() == usage)
+                            {
+                                return None;
+                            }
                             if usage.starts_with(|c: char| c.is_lowercase()) {
                                 Some(self.to_rust_const_case(usage).to_token_stream())
                             } else if usage.starts_with(|c: char| c.is_uppercase()) {
@@ -261,8 +266,8 @@ impl Rasn {
                         })
                         .collect()
                 };
-                quote!(use super:: #module::{ #(#used_imports),* };)
-            });
+                quote!(use super:: #import_module::{ #(#used_imports),* };)
+            }).collect::<Vec<_>>();
             let (pdus, warnings): (Vec<TokenStream>, Vec<CompilerError>) =
                 tlds.into_iter().fold((vec![], vec![]), |mut acc, tld| {
                     match self.generate_tld(tld) {

@@ -436,6 +436,19 @@ impl ModuleHeader {
             .iter()
             .find_map(|i| i.types.iter().find(|id| *id == identifier))
     }
+
+    pub(crate) fn imported_modules<'a>(&'a self, identifier: &'a str) -> impl Iterator<Item = &'a str> {
+        self.imports.iter().filter_map(move |import| {
+            import.types.iter()
+                .any(|name| name == identifier || name.strip_suffix("{}") == Some(identifier))
+                .then_some(import.global_module_reference.module_reference.as_str())
+        })
+    }
+
+    pub(crate) fn has_conflicting_import(&self, identifier: &str) -> bool {
+        let mut modules = self.imported_modules(identifier);
+        modules.next().is_some_and(|first| modules.any(|module| module != first))
+    }
 }
 
 impl

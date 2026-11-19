@@ -31,8 +31,8 @@ macro_rules! call_template {
 }
 
 macro_rules! assignment {
-    ($this:ident, $unformatted:expr, $inner:expr) => {{
-        let ty = $this.to_rust_title_case($unformatted);
+    ($ty:expr, $inner:expr) => {{
+        let ty = $ty;
         let inner = $inner;
         quote!(#ty(#inner))
     }};
@@ -128,7 +128,7 @@ impl Rasn {
             let (ty, val) = if tld.associated_type.is_builtin_type() {
                 (integer_type.into_token_stream(), formatted_value)
             } else {
-                let ty = self.to_rust_title_case(&tld.associated_type.as_str());
+                let ty = self.type_to_tokens(&tld.associated_type)?;
                 (ty.clone(), quote!(#ty(#formatted_value)))
             };
             if integer_type.is_unbounded() {
@@ -283,8 +283,8 @@ impl Rasn {
                     self,
                     primitive_value_template,
                     tld,
-                    self.to_rust_title_case(&ty.as_str()),
-                    assignment!(self, &ty.as_str(), quote!(()))
+                    self.type_to_tokens(ty)?,
+                    assignment!(self.type_to_tokens(ty)?, quote!(()))
                 )
             }
             ASN1Value::Boolean(b) if ty.is_builtin_type() => call_template!(
@@ -298,8 +298,8 @@ impl Rasn {
                 self,
                 primitive_value_template,
                 tld,
-                self.to_rust_title_case(&ty.as_str()),
-                assignment!(self, &ty.as_str(), b.to_token_stream())
+                self.type_to_tokens(ty)?,
+                assignment!(self.type_to_tokens(ty)?, b.to_token_stream())
             ),
             ASN1Value::LinkedIntValue { .. } => self.generate_integer_value(tld),
             ASN1Value::BitString(_) if ty.is_builtin_type() => call_template!(
@@ -328,7 +328,7 @@ impl Rasn {
                         self,
                         const_choice_value_template,
                         tld,
-                        self.to_rust_title_case(&ty.as_str()),
+                        self.type_to_tokens(ty)?,
                         self.to_rust_enum_identifier(variant_name),
                         self.value_to_tokens(inner_value, None)?
                     )
@@ -337,7 +337,7 @@ impl Rasn {
                         self,
                         choice_value_template,
                         tld,
-                        self.to_rust_title_case(&ty.as_str()),
+                        self.type_to_tokens(ty)?,
                         self.to_rust_enum_identifier(variant_name),
                         self.value_to_tokens(inner_value, None)?,
                         self.config.no_std_compliant_bindings
@@ -351,7 +351,11 @@ impl Rasn {
                 self,
                 enum_value_template,
                 tld,
-                self.to_rust_title_case(enumerated),
+                if matches!(ty, ASN1Type::ElsewhereDeclaredType(reference) if &reference.identifier == enumerated) {
+                    self.type_to_tokens(ty)?
+                } else {
+                    self.to_rust_title_case(enumerated)
+                },
                 self.to_rust_enum_identifier(enumerable)
             ),
             ASN1Value::Time(_) if ty.is_builtin_type() => match ty {
@@ -388,7 +392,7 @@ impl Rasn {
                     self,
                     sequence_or_set_value_template,
                     tld,
-                    self.to_rust_title_case(&ty.as_str()),
+                    self.type_to_tokens(ty)?,
                     quote!(#(#members),*),
                     self.config.no_std_compliant_bindings
                 )
@@ -400,10 +404,9 @@ impl Rasn {
                         self,
                         primitive_value_template,
                         tld,
-                        self.to_rust_title_case(&ty.as_str()),
+                        self.type_to_tokens(ty)?,
                         assignment!(
-                            self,
-                            &ty.as_str(),
+                            self.type_to_tokens(ty)?,
                             self.value_to_tokens(&tld.value, parent.as_ref())?
                         )
                     )
@@ -412,10 +415,9 @@ impl Rasn {
                         self,
                         lazy_static_value_template,
                         tld,
-                        self.to_rust_title_case(&ty.as_str()),
+                        self.type_to_tokens(ty)?,
                         assignment!(
-                            self,
-                            &ty.as_str(),
+                            self.type_to_tokens(ty)?,
                             self.value_to_tokens(&tld.value, parent.as_ref())?
                         ),
                         self.config.no_std_compliant_bindings
@@ -475,8 +477,8 @@ impl Rasn {
                 self,
                 lazy_static_value_template,
                 tld,
-                self.to_rust_title_case(&ty.as_str()),
-                assignment!(self, &ty.as_str(), self.value_to_tokens(&tld.value, None)?),
+                self.type_to_tokens(ty)?,
+                assignment!(self.type_to_tokens(ty)?, self.value_to_tokens(&tld.value, None)?),
                 self.config.no_std_compliant_bindings
             ),
             _ => Ok(TokenStream::new()),
