@@ -16,7 +16,7 @@ pub mod test_module {
     use rasn::prelude::*;
     use std::sync::LazyLock;
     #[doc = " Anonymous SEQUENCE OF member "]
-    #[derive(AsnType, Debug, Clone, Decode, Encode, PartialEq, Eq, Hash)]
+    #[derive(AsnType, Debug, Clone, Decode, Encode, PartialEq, Eq, Hash, Copy)]
     #[rasn(automatic_tags, identifier = "SEQUENCE")]
     pub struct AnonymousTFCSReconfAddR12CtfcSizeCtfc8Bit {
         #[rasn(value("0..=255"))]
@@ -34,7 +34,7 @@ pub mod test_module {
         pub SequenceOf<AnonymousTFCSReconfAddR12CtfcSizeCtfc8Bit>,
     );
     #[doc = " Anonymous SEQUENCE OF member "]
-    #[derive(AsnType, Debug, Clone, Decode, Encode, PartialEq, Eq, Hash)]
+    #[derive(AsnType, Debug, Clone, Decode, Encode, PartialEq, Eq, Hash, Copy)]
     #[rasn(automatic_tags, identifier = "SEQUENCE")]
     pub struct AnonymousTFCSReconfAddR12CtfcSizeCtfc16Bit {
         #[rasn(value("0..=65535"))]

@@ -15,7 +15,7 @@ pub mod test_module {
     use core::borrow::Borrow;
     use rasn::prelude::*;
     use std::sync::LazyLock;
-    #[derive(AsnType, Debug, Clone, Decode, Encode, PartialEq, Eq, Hash)]
+    #[derive(AsnType, Debug, Clone, Decode, Encode, PartialEq, Eq, Hash, Copy)]
     #[rasn(automatic_tags)]
     pub struct ImplType {
         #[rasn(value("2..=12"), identifier = "int-value")]

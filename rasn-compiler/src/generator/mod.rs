@@ -33,6 +33,17 @@ pub trait Backend: Default {
         top_level_declarations: Vec<ToplevelDefinition>,
     ) -> Result<GeneratedModule, GeneratorError>;
 
+    /// Generates bindings for the linked modules in one compilation.
+    fn generate_modules(
+        &mut self,
+        modules: Vec<Vec<ToplevelDefinition>>,
+    ) -> Result<Vec<GeneratedModule>, GeneratorError> {
+        modules
+            .into_iter()
+            .map(|module| self.generate_module(module))
+            .collect()
+    }
+
     /// generates bindings for a single ASN.1 item
     /// ### Params
     /// - `tld` [ToplevelDefinition] for which the bindings should be generated

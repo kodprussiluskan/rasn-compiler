@@ -524,8 +524,10 @@ impl<B: Backend> Compiler<B, CompilerReady> {
                 modules
             },
         );
-        for (_, module) in modules {
-            let mut generated_module = self.backend.generate_module(module)?;
+        for mut generated_module in self
+            .backend
+            .generate_modules(modules.into_values().collect())?
+        {
             if let Some(m) = generated_module.generated {
                 generated_modules.push(m);
             }

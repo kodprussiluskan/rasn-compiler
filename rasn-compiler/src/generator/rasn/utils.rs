@@ -553,6 +553,14 @@ impl Rasn {
         })
     }
 
+    pub(super) fn inline_integer_type(
+        &self,
+        integer: &types::Integer,
+    ) -> Result<Ident, GeneratorError> {
+        let range = per_visible_range_constraints(true, &integer.constraints)?;
+        Ok(self.int_type_token(range.min(), range.max(), range.is_extensible()))
+    }
+
     pub(crate) fn constraints_and_type_name(
         &self,
         ty: &ASN1Type,
@@ -563,18 +571,10 @@ impl Rasn {
         Ok(match ty {
             ASN1Type::Null => (vec![], quote!(())),
             ASN1Type::Boolean(b) => (b.constraints.clone(), quote!(bool)),
-            ASN1Type::Integer(i) => {
-                let per_constraints = per_visible_range_constraints(true, &i.constraints)?;
-                (
-                    i.constraints.clone(),
-                    self.int_type_token(
-                        per_constraints.min(),
-                        per_constraints.max(),
-                        per_constraints.is_extensible(),
-                    )
-                    .to_token_stream(),
-                )
-            }
+            ASN1Type::Integer(i) => (
+                i.constraints.clone(),
+                self.inline_integer_type(i)?.to_token_stream(),
+            ),
             ASN1Type::Real(_) => (vec![], quote!(f64)),
             ASN1Type::ObjectIdentifier(o) => (o.constraints.clone(), quote!(ObjectIdentifier)),
             ASN1Type::BitString(b) => (b.constraints.clone(), quote!(BitString)),

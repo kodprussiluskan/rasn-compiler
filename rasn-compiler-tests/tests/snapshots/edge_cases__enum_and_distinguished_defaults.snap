@@ -24,7 +24,7 @@ pub mod test_module {
     #[derive(AsnType, Debug, Clone, Decode, Encode, PartialEq, Eq, Hash, Copy)]
     #[rasn(delegate, value("1..=10"))]
     pub struct IntWithDefault(pub u8);
-    #[derive(AsnType, Debug, Clone, Decode, Encode, PartialEq, Eq, Hash)]
+    #[derive(AsnType, Debug, Clone, Decode, Encode, PartialEq, Eq, Hash, Copy)]
     #[rasn(automatic_tags)]
     pub struct Test {
         #[rasn(default = "test_int_default")]

@@ -18,7 +18,7 @@ pub mod test_module {
     #[derive(AsnType, Debug, Clone, Decode, Encode, PartialEq, Eq, Hash, Copy)]
     #[rasn(delegate, value("1..=10"))]
     pub struct Distinguished(pub u8);
-    #[derive(AsnType, Debug, Clone, Decode, Encode, PartialEq, Eq, Hash)]
+    #[derive(AsnType, Debug, Clone, Decode, Encode, PartialEq, Eq, Hash, Copy)]
     #[rasn(delegate, value("2..=8"))]
     pub struct Restricted(pub Distinguished);
 }

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The rasn backend derives `Copy` for eligible sequences, sets, choices, aliases, fixed-size strings, and time wrappers. Generated public types that derive `Copy` can lose it if a schema revision adds an owning field.
+
 ## [0.14.3](https://github.com/librasn/compiler/compare/rasn-compiler-v0.14.2...rasn-compiler-v0.14.3) - 2025-08-25
 
 ### Fixed

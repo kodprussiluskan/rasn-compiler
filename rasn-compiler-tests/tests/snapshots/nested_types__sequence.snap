@@ -21,7 +21,7 @@ pub mod test_module {
     #[derive(AsnType, Debug, Clone, Decode, Encode, PartialEq, Eq, Hash, Copy)]
     #[rasn(delegate, identifier = "Test-Int", value("0..=123723"))]
     pub struct TestInt(pub u32);
-    #[derive(AsnType, Debug, Clone, Decode, Encode, PartialEq, Eq, Hash)]
+    #[derive(AsnType, Debug, Clone, Decode, Encode, PartialEq, Eq, Hash, Copy)]
     #[rasn(automatic_tags, identifier = "Test-Sequence")]
     pub struct TestSequence {
         #[rasn(default = "test_sequence_int_default")]
@@ -36,10 +36,10 @@ pub mod test_module {
     fn test_sequence_int_default() -> WrappingInt {
         WrappingInt(TestInt(5))
     }
-    #[derive(AsnType, Debug, Clone, Decode, Encode, PartialEq, Eq, Hash)]
+    #[derive(AsnType, Debug, Clone, Decode, Encode, PartialEq, Eq, Hash, Copy)]
     #[rasn(delegate, identifier = "Wrapping-Boolean")]
     pub struct WrappingBoolean(pub TestBoolean);
-    #[derive(AsnType, Debug, Clone, Decode, Encode, PartialEq, Eq, Hash)]
+    #[derive(AsnType, Debug, Clone, Decode, Encode, PartialEq, Eq, Hash, Copy)]
     #[rasn(delegate, identifier = "Wrapping-Int", value("0..=123"))]
     pub struct WrappingInt(pub TestInt);
     pub static VALUE: LazyLock<TestSequence> = LazyLock::new(|| {

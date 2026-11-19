@@ -20,6 +20,7 @@ use super::{
 };
 
 mod builder;
+mod copy;
 mod template;
 mod utils;
 
@@ -33,6 +34,8 @@ pub struct Rasn {
     /// A combination of the builtin required derives (`Rasn::REQUIRED_DERIVES`) and those supplied
     /// by the user in `Config::type_annotations`.
     required_derives: Vec<String>,
+    copy_types: copy::CopyTypes,
+    copy_module: Option<ModuleHeader>,
 }
 
 #[cfg_attr(target_family = "wasm", wasm_bindgen(getter_with_clone))]
@@ -67,6 +70,9 @@ pub struct Config {
     /// Annotations to be added to all generated rust types of the bindings. Each vector element
     /// will generate a new line of annotations. Note that the compiler will automatically add all pound-derives
     /// needed by `rasn` __except__ `Eq` and `Hash`, which are needed only when working with `SET`s.
+    ///
+    /// The backend infers additional `Copy` derives when custom imports and non-derive
+    /// annotations are absent, since these may affect field types or generated implementations.
     ///
     /// Default: `vec![String::from("#[derive(AsnType, Debug, Clone, Decode, Encode, PartialEq, Eq, Hash)]")]`
     pub type_annotations: Vec<String>,
@@ -148,6 +154,8 @@ impl Backend for Rasn {
             extensibility_environment,
             tagging_environment,
             required_derives,
+            copy_types: copy::CopyTypes::default(),
+            copy_module: None,
         }
     }
 
@@ -167,83 +175,23 @@ impl Backend for Rasn {
         &mut self,
         tlds: Vec<ToplevelDefinition>,
     ) -> Result<GeneratedModule, GeneratorError> {
-        if let Some(module_ref) = tlds.first().and_then(|tld| tld.get_module_header()) {
-            let module = module_ref.borrow();
-            self.tagging_environment = module.tagging_environment;
-            self.extensibility_environment = module.extensibility_environment;
-            let name = self.to_rust_snake_case(&module.name);
-            let custom_imports = self
-                .config
-                .custom_imports
-                .iter()
-                .map(|i| TokenStream::from_str(i.as_str()).map(|i| quote!(use #i;)))
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| GeneratorError {
-                    details: e.to_string(),
-                    ..Default::default()
-                })?;
-            let imports = module.imports.iter().map(|import| {
-                let module =
-                    self.to_rust_snake_case(&import.global_module_reference.module_reference);
-                let mut usages = Some(vec![]);
-                'imports: for usage in &import.types {
-                    if usage.contains("{}") || usage.chars().all(|c| c.is_uppercase() || c == '-') {
-                        usages = None;
-                        break 'imports;
-                    } else if usage.starts_with(|c: char| c.is_lowercase()) {
-                        if let Some(us) = usages.as_mut() {
-                            us.push(self.to_rust_const_case(usage).to_token_stream())
-                        }
-                    } else if usage.starts_with(|c: char| c.is_uppercase()) {
-                        if let Some(us) = usages.as_mut() {
-                            us.push(self.to_rust_title_case(usage).to_token_stream())
-                        }
-                    }
-                }
-                let used_imports = if self.config.default_wildcard_imports {
-                    vec![TokenStream::from_str("*").unwrap()]
-                } else {
-                    usages.unwrap_or(vec![TokenStream::from_str("*").unwrap()])
-                };
-                quote!(use super:: #module::{ #(#used_imports),* };)
-            });
-            let (pdus, warnings): (Vec<TokenStream>, Vec<CompilerError>) =
-                tlds.into_iter().fold((vec![], vec![]), |mut acc, tld| {
-                    match self.generate_tld(tld) {
-                        Ok(s) => {
-                            acc.0.push(s);
-                            acc
-                        }
-                        Err(e) => {
-                            acc.1.push(e.into());
-                            acc
-                        }
-                    }
-                });
-            let lazy_const_import = if self.config.no_std_compliant_bindings {
-                quote!(lazy_static::lazy_static)
-            } else {
-                quote!(std::sync::LazyLock)
-            };
-            Ok(GeneratedModule {
-                generated: Some(quote! {
-                #[allow(non_camel_case_types, non_snake_case, non_upper_case_globals, unused,
-                        clippy::too_many_arguments,)]
-                pub mod #name {
-                    extern crate alloc;
+        self.copy_types = self.collect_copy_types(std::slice::from_ref(&tlds));
+        let generated = self.render_module(tlds);
+        self.copy_types = copy::CopyTypes::default();
+        generated
+    }
 
-                    use core::borrow::Borrow;
-                    use #lazy_const_import;
-                    use rasn::prelude::*;
-                    #(#custom_imports)*
-                    #(#imports)*
-
-                    #(#pdus)*
-                }
-            }.to_string()), warnings})
-        } else {
-            Ok(GeneratedModule::empty())
-        }
+    fn generate_modules(
+        &mut self,
+        modules: Vec<Vec<ToplevelDefinition>>,
+    ) -> Result<Vec<GeneratedModule>, GeneratorError> {
+        self.copy_types = self.collect_copy_types(&modules);
+        let generated = modules
+            .into_iter()
+            .map(|module| self.render_module(module))
+            .collect();
+        self.copy_types = copy::CopyTypes::default();
+        generated
     }
 
     fn format_bindings(bindings: &str) -> Result<String, CompilerError> {
@@ -265,6 +213,99 @@ impl Backend for Rasn {
 impl Rasn {
     const REQUIRED_DERIVES: [&'static str; 6] =
         ["AsnType", "Debug", "Clone", "Decode", "Encode", "PartialEq"];
+
+    fn uses_wildcard_import(&self, import: &Import) -> bool {
+        self.config.default_wildcard_imports
+            || import.types.iter().any(|usage| {
+                usage.contains("{}") || usage.chars().all(|c| c.is_uppercase() || c == '-')
+            })
+    }
+
+    fn render_module(
+        &mut self,
+        tlds: Vec<ToplevelDefinition>,
+    ) -> Result<GeneratedModule, GeneratorError> {
+        if let Some(module_ref) = tlds.first().and_then(|tld| tld.get_module_header()) {
+            let module = module_ref.borrow();
+            self.tagging_environment = module.tagging_environment;
+            self.extensibility_environment = module.extensibility_environment;
+            let name = self.to_rust_snake_case(&module.name);
+            let custom_imports = self
+                .config
+                .custom_imports
+                .iter()
+                .map(|i| TokenStream::from_str(i.as_str()).map(|i| quote!(use #i;)))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| GeneratorError {
+                    details: e.to_string(),
+                    ..Default::default()
+                })?;
+            self.copy_module = Some(module.clone());
+            let imports = module.imports.iter().map(|import| {
+                let module =
+                    self.to_rust_snake_case(&import.global_module_reference.module_reference);
+                let used_imports = if self.uses_wildcard_import(import) {
+                    vec![quote!(*)]
+                } else {
+                    import
+                        .types
+                        .iter()
+                        .filter_map(|usage| {
+                            if usage.starts_with(|c: char| c.is_lowercase()) {
+                                Some(self.to_rust_const_case(usage).to_token_stream())
+                            } else if usage.starts_with(|c: char| c.is_uppercase()) {
+                                Some(self.to_rust_title_case(usage).to_token_stream())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect()
+                };
+                quote!(use super:: #module::{ #(#used_imports),* };)
+            });
+            let (pdus, warnings): (Vec<TokenStream>, Vec<CompilerError>) =
+                tlds.into_iter().fold((vec![], vec![]), |mut acc, tld| {
+                    match self.generate_tld(tld) {
+                        Ok(s) => {
+                            acc.0.push(s);
+                            acc
+                        }
+                        Err(e) => {
+                            acc.1.push(e.into());
+                            acc
+                        }
+                    }
+                });
+            let lazy_const_import = if self.config.no_std_compliant_bindings {
+                quote!(lazy_static::lazy_static)
+            } else {
+                quote!(std::sync::LazyLock)
+            };
+            let generated = quote! {
+                #[allow(non_camel_case_types, non_snake_case, non_upper_case_globals, unused,
+                        clippy::too_many_arguments,)]
+                pub mod #name {
+                    extern crate alloc;
+
+                    use core::borrow::Borrow;
+                    use #lazy_const_import;
+                    use rasn::prelude::*;
+                    #(#custom_imports)*
+                    #(#imports)*
+
+                    #(#pdus)*
+                }
+            }
+            .to_string();
+            self.copy_module = None;
+            Ok(GeneratedModule {
+                generated: Some(generated),
+                warnings,
+            })
+        } else {
+            Ok(GeneratedModule::empty())
+        }
+    }
 
     fn get_rustfmt_path() -> Result<PathBuf, Box<dyn Error>> {
         // Try ~/.cargo/bin/rustfmt style paths first

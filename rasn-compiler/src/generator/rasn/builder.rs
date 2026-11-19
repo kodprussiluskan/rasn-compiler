@@ -111,7 +111,7 @@ impl Rasn {
                 self.format_comments(&tld.comments),
                 name,
                 alias,
-                self.join_annotations(annotations, false, true)?,
+                self.join_annotations(annotations, self.can_derive_copy(&tld.ty), true)?,
             ))
         } else {
             self.type_mismatch_error(tld, "type alias")
@@ -187,7 +187,7 @@ impl Rasn {
                 Ok(fixed_bit_string_template(
                     self.format_comments(&tld.comments),
                     name,
-                    self.join_annotations(annotations, false, true)?,
+                    self.join_annotations(annotations, self.can_derive_copy(&tld.ty), true)?,
                     size.to_token_stream(),
                 ))
             } else {
@@ -215,7 +215,7 @@ impl Rasn {
                 Ok(fixed_octet_string_template(
                     self.format_comments(&tld.comments),
                     name,
-                    self.join_annotations(annotations, false, true)?,
+                    self.join_annotations(annotations, self.can_derive_copy(&tld.ty), true)?,
                     size.to_token_stream(),
                 ))
             } else {
@@ -507,7 +507,7 @@ impl Rasn {
             Ok(generalized_time_template(
                 self.format_comments(&tld.comments),
                 name,
-                self.join_annotations(annotations, false, true)?,
+                self.join_annotations(annotations, self.can_derive_copy(&tld.ty), true)?,
             ))
         } else {
             self.type_mismatch_error(tld, "GeneralizedTime")
@@ -523,7 +523,7 @@ impl Rasn {
             Ok(utc_time_template(
                 self.format_comments(&tld.comments),
                 name,
-                self.join_annotations(annotations, false, true)?,
+                self.join_annotations(annotations, self.can_derive_copy(&tld.ty), true)?,
             ))
         } else {
             self.type_mismatch_error(tld, "UTCTime")
@@ -654,7 +654,7 @@ impl Rasn {
                 extensible,
                 formatted_options.enum_body,
                 formatted_options.nested_anonymous_types,
-                self.join_annotations(annotations, false, true)?,
+                self.join_annotations(annotations, self.can_derive_copy(&tld.ty), true)?,
             );
             if self.config.generate_from_impls {
                 let mut map = BTreeMap::new();
@@ -781,7 +781,7 @@ impl Rasn {
                     extensible,
                     formatted_members.struct_body,
                     formatted_members.nested_anonymous_types,
-                    self.join_annotations(annotations, false, true)?,
+                    self.join_annotations(annotations, self.can_derive_copy(&tld.ty), true)?,
                     self.format_default_methods(&seq.members, &name.to_string())?,
                     self.format_new_impl(&name, formatted_members.name_types),
                     self.format_default_impl(&tld.name, &seq.members),
