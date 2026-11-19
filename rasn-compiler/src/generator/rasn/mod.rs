@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     env,
     error::Error,
     io::{self, Write},
@@ -24,6 +25,8 @@ mod copy;
 mod real;
 mod template;
 mod utils;
+
+use copy::{TypeDeclarations, type_declarations};
 
 #[derive(Debug)]
 /// A compiler backend that generates bindings to be used with
@@ -176,20 +179,35 @@ impl Backend for Rasn {
         &mut self,
         tlds: Vec<ToplevelDefinition>,
     ) -> Result<GeneratedModule, GeneratorError> {
-        self.copy_types = self.collect_copy_types(std::slice::from_ref(&tlds));
-        let generated = self.render_module(tlds);
-        self.copy_types = copy::CopyTypes::default();
-        generated
+        self.generate_modules(vec![tlds])
+            .map(|mut modules| modules.pop().unwrap())
     }
 
     fn generate_modules(
         &mut self,
         modules: Vec<Vec<ToplevelDefinition>>,
     ) -> Result<Vec<GeneratedModule>, GeneratorError> {
-        self.copy_types = self.collect_copy_types(&modules);
+        let declarations = type_declarations(&modules);
+        self.copy_types = self.collect_copy_types(&modules, &declarations);
+        let real_constants: Vec<_> = modules
+            .iter()
+            .map(|module| {
+                module
+                    .iter()
+                    .filter_map(|definition| {
+                        let ToplevelDefinition::Value(value) = definition else {
+                            return None;
+                        };
+                        self.generate_real_constant(value, &declarations)
+                            .map(|constant| (value.name.clone(), constant))
+                    })
+                    .collect()
+            })
+            .collect();
         let generated = modules
             .into_iter()
-            .map(|module| self.render_module(module))
+            .zip(real_constants)
+            .map(|(module, constants)| self.render_module(module, constants))
             .collect();
         self.copy_types = copy::CopyTypes::default();
         generated
@@ -207,6 +225,11 @@ impl Backend for Rasn {
     }
 
     fn generate(&self, tld: ToplevelDefinition) -> Result<String, GeneratorError> {
+        if let ToplevelDefinition::Value(value) = &tld {
+            if let Some(constant) = self.generate_real_constant(value, &TypeDeclarations::new()) {
+                return constant.map(|tokens| tokens.to_string());
+            }
+        }
         self.generate_tld(tld).map(|ts| ts.to_string())
     }
 }
@@ -225,6 +248,7 @@ impl Rasn {
     fn render_module(
         &mut self,
         tlds: Vec<ToplevelDefinition>,
+        mut real_constants: BTreeMap<String, Result<TokenStream, GeneratorError>>,
     ) -> Result<GeneratedModule, GeneratorError> {
         if let Some(module_ref) = tlds.first().and_then(|tld| tld.get_module_header()) {
             let module = module_ref.borrow();
@@ -271,7 +295,10 @@ impl Rasn {
             }).collect::<Vec<_>>();
             let (pdus, warnings): (Vec<TokenStream>, Vec<CompilerError>) =
                 tlds.into_iter().fold((vec![], vec![]), |mut acc, tld| {
-                    match self.generate_tld(tld) {
+                    let generated = real_constants
+                        .remove(tld.name())
+                        .unwrap_or_else(|| self.generate_tld(tld));
+                    match generated {
                         Ok(s) => {
                             acc.0.push(s);
                             acc

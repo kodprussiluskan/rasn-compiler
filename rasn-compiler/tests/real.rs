@@ -23,3 +23,27 @@ fn real_width_uses_the_oer_component_bounds() {
         .to_string()
         .contains("OER binary32 or binary64"));
 }
+
+#[test]
+fn unconstrained_real_constants_are_skipped() {
+    let result = RasnCompiler::new()
+        .add_asn_literal(
+            "Numbers DEFINITIONS ::= BEGIN
+                Plain ::= REAL
+                named Plain ::= 1.5
+                direct REAL ::= 1.5
+            END",
+        )
+        .compile_to_string()
+        .unwrap();
+
+    assert_eq!(result.warnings.len(), 2, "{:?}", result.warnings);
+    assert!(
+        result.warnings.iter().all(|warning| warning
+            .to_string()
+            .contains("OER binary32 or binary64")),
+        "{:?}",
+        result.warnings
+    );
+    assert!(!result.generated.contains("pub const"));
+}

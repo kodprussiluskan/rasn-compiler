@@ -8,6 +8,21 @@ use crate::intermediate::{
 use super::Rasn;
 
 type TypeId = (String, String);
+pub(super) type TypeDeclarations<'a> = BTreeMap<TypeId, &'a ToplevelTypeDefinition>;
+
+pub(super) fn type_declarations(modules: &[Vec<ToplevelDefinition>]) -> TypeDeclarations<'_> {
+    modules
+        .iter()
+        .flatten()
+        .filter_map(|item| {
+            let ToplevelDefinition::Type(ty) = item else {
+                return None;
+            };
+            let module = ty.module_header.as_ref()?.borrow().name.clone();
+            Some(((module, ty.name.clone()), ty))
+        })
+        .collect()
+}
 const COPY_BUILTINS: [&str; 4] = [
     "UtcTime",
     "GeneralizedTime",
@@ -29,7 +44,7 @@ impl CopyTypes {
     }
 }
 
-fn resolve(
+pub(super) fn resolve(
     reference: &DeclarationElsewhere,
     module: &ModuleHeader,
     contains: impl Fn(&TypeId) -> bool,
@@ -58,23 +73,16 @@ impl Rasn {
         self.config.custom_imports.is_empty() && self.config.type_annotations.is_empty()
     }
 
-    pub(super) fn collect_copy_types(&self, modules: &[Vec<ToplevelDefinition>]) -> CopyTypes {
+    pub(super) fn collect_copy_types(
+        &self,
+        modules: &[Vec<ToplevelDefinition>],
+        declarations: &TypeDeclarations<'_>,
+    ) -> CopyTypes {
         let mut types = CopyTypes::default();
-        let declarations = modules
-            .iter()
-            .flatten()
-            .filter_map(|item| {
-                let ToplevelDefinition::Type(ty) = item else {
-                    return None;
-                };
-                let module = ty.module_header.as_ref()?.borrow().name.clone();
-                Some(((module, ty.name.clone()), ty))
-            })
-            .collect::<BTreeMap<_, _>>();
         types.known.extend(declarations.keys().cloned().map(|id| (id, false)));
         loop {
             let mut changed = false;
-            for (id, declaration) in &declarations {
+            for (id, declaration) in declarations {
                 let header = declaration.module_header.as_ref().unwrap().borrow();
                 if contains_real(&declaration.ty, &|reference| {
                     resolve(reference, &header, |id| declarations.contains_key(id))
@@ -99,7 +107,7 @@ impl Rasn {
             .iter()
             .map(|header| (header.borrow().name.clone(), BTreeSet::new()))
             .collect::<BTreeMap<_, _>>();
-        for ((module, name), ty) in &declarations {
+        for ((module, name), ty) in declarations {
             if ty.parameterization.is_none() {
                 for runtime_name in COPY_BUILTINS {
                     if self.shadows_rust_name(name, &ty.ty, runtime_name) {
@@ -138,7 +146,7 @@ impl Rasn {
             }
         }
         for id in declarations.keys() {
-            self.evaluate_copy(id, &declarations, &mut types);
+            self.evaluate_copy(id, declarations, &mut types);
         }
         types
     }

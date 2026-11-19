@@ -1280,6 +1280,36 @@ impl ASN1Value {
                 }
                 Ok(())
             }
+            (ASN1Type::Real(_), ASN1Value::LinkedNestedValue { value, .. }) => {
+                value.link_with_type(tlds, ty, type_name)
+            }
+            (ASN1Type::Real(_), ASN1Value::Integer(value)) => {
+                *self = ASN1Value::Real(*value as f64);
+                Ok(())
+            }
+            (ASN1Type::Real(_), ASN1Value::SequenceOrSet(fields)) => {
+                let error = || grammar_error!(LinkerError, "Invalid REAL mantissa, base and exponent");
+                let [mantissa, base, exponent] = fields.as_slice() else {
+                    return Err(error());
+                };
+                let component = |(field, value): &(Option<String>, Box<ASN1Value>), name| {
+                    match (field.as_deref(), value.as_ref()) {
+                        (Some(field), ASN1Value::Integer(value)) if field == name => Some(*value),
+                        _ => None,
+                    }
+                };
+                let mantissa = component(mantissa, "mantissa")
+                    .and_then(|value| i64::try_from(value).ok())
+                    .ok_or_else(error)?;
+                let base = component(base, "base")
+                    .filter(|base| matches!(base, 2 | 10))
+                    .ok_or_else(error)?;
+                let exponent = component(exponent, "exponent")
+                    .and_then(|value| i32::try_from(value).ok())
+                    .ok_or_else(error)?;
+                *self = ASN1Value::Real(mantissa as f64 * (base as f64).powf(f64::from(exponent)));
+                Ok(())
+            }
             (ASN1Type::Integer(i), ASN1Value::LinkedNestedValue { value, .. })
                 if matches![**value, ASN1Value::Integer(_)] =>
             {

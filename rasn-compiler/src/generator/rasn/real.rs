@@ -1,4 +1,5 @@
-use proc_macro2::TokenStream;
+use proc_macro2::{Literal, TokenStream};
+use std::collections::BTreeSet;
 use quote::quote;
 
 use crate::generator::error::{GeneratorError, GeneratorErrorType};
@@ -8,12 +9,63 @@ use crate::intermediate::{
         SetOperator, SubtypeElements,
     },
     types::Real,
-    ASN1Value,
+    ASN1Type, ASN1Value, ToplevelValueDefinition,
 };
 
-use super::Rasn;
+use super::{copy::resolve, Rasn, TypeDeclarations};
 
 impl Rasn {
+    /// Resolve the primitive and the Rust tuple wrappers, from outermost to innermost.
+    pub(super) fn real_constant_type<'a>(
+        &self,
+        value: &'a ToplevelValueDefinition,
+        declarations: &TypeDeclarations<'a>,
+    ) -> Option<(&'a Real, Vec<TokenStream>)> {
+        if let ASN1Type::Real(real) = &value.associated_type {
+            return Some((real, vec![]));
+        }
+        let mut module = value.module_header.as_ref()?.borrow();
+        let origin = module.name.clone();
+        let mut ty = &value.associated_type;
+        let mut wrappers = vec![];
+        let mut visited = BTreeSet::new();
+        while let ASN1Type::ElsewhereDeclaredType(reference) = ty {
+            let id = resolve(reference, &module, |id| declarations.contains_key(id))?;
+            let declaration = declarations.get(&id)?;
+            if !visited.insert(id.clone()) {
+                return None;
+            }
+            let wraps = !matches!(declaration.ty, ASN1Type::Real(_))
+                || declaration.tag.is_some()
+                || !declaration.jer.is_empty();
+            if wraps {
+                wrappers.push(self.to_rust_qualified_type(
+                    (id.0 != origin).then_some(id.0.as_str()),
+                    &id.1,
+                ));
+            }
+            ty = &declaration.ty;
+            if let ASN1Type::Real(real) = ty {
+                return Some((real, wrappers));
+            }
+            module = declaration.module_header.as_ref()?.borrow();
+        }
+        None
+    }
+
+    pub(super) fn real_literal(value: f64) -> TokenStream {
+        if value.is_nan() {
+            quote!(core::primitive::f64::NAN)
+        } else if value == f64::INFINITY {
+            quote!(core::primitive::f64::INFINITY)
+        } else if value == f64::NEG_INFINITY {
+            quote!(core::primitive::f64::NEG_INFINITY)
+        } else {
+            let literal = Literal::f64_suffixed(value);
+            quote!(#literal)
+        }
+    }
+
     pub(super) fn real_storage(real: &Real) -> Result<TokenStream, GeneratorError> {
         let storage = (|| {
             let [Constraint::Subtype(ElementSetSpecs {

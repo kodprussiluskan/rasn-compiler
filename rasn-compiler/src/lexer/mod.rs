@@ -220,6 +220,7 @@ pub fn asn1_value(input: Input<'_>) -> ParserResult<'_, ASN1Value> {
         time_value,
         bit_string_value,
         boolean_value,
+        decimal_real_value,
         integer_value,
         real_value,
         character_string_value,

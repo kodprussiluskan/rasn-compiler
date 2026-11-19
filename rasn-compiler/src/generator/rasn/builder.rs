@@ -39,7 +39,7 @@ macro_rules! assignment {
 }
 
 impl Rasn {
-    pub(crate) fn generate_tld(
+    pub(super) fn generate_tld(
         &self,
         tld: ToplevelDefinition,
     ) -> Result<TokenStream, GeneratorError> {
@@ -279,7 +279,54 @@ impl Rasn {
         }
     }
 
-    pub(crate) fn generate_value(
+    pub(super) fn generate_real_constant(
+        &self,
+        tld: &ToplevelValueDefinition,
+        declarations: &super::TypeDeclarations<'_>,
+    ) -> Option<Result<TokenStream, GeneratorError>> {
+        let (real, wrappers) = self.real_constant_type(tld, declarations)?;
+        let ty = &tld.associated_type;
+        Some((|| {
+            let storage = match Self::real_storage(real) {
+                Ok(storage) => storage,
+                // The named REAL declaration already reports its unsupported constraints.
+                Err(_) if !ty.is_builtin_type() => return Ok(TokenStream::new()),
+                Err(error) => return Err(error),
+            };
+            let mut value = &tld.value;
+            while let ASN1Value::LinkedNestedValue { value: inner, .. } = value {
+                value = inner;
+            }
+            let wrap_literal = |value| {
+                let literal = Self::real_literal(value);
+                wrappers.into_iter().rev().fold(
+                    quote!(#literal as #storage),
+                    |value, wrapper| quote!(#wrapper(#value)),
+                )
+            };
+            let initializer = match value {
+                ASN1Value::Real(value) => wrap_literal(*value),
+                ASN1Value::Integer(value) => wrap_literal(*value as f64),
+                ASN1Value::LinkedElsewhereDefinedValue { .. } => self.value_to_tokens(value, None)?,
+                _ => {
+                    return Err(GeneratorError::new(
+                        Some(ToplevelDefinition::Value(tld.clone())),
+                        "Expected a REAL value",
+                        GeneratorErrorType::Asn1TypeMismatch,
+                    ))
+                }
+            };
+            call_template!(
+                self,
+                primitive_value_template,
+                tld,
+                self.type_to_tokens(ty)?,
+                initializer
+            )
+        })())
+    }
+
+    fn generate_value(
         &self,
         tld: ToplevelValueDefinition,
     ) -> Result<TokenStream, GeneratorError> {

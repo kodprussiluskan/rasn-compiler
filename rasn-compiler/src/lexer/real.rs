@@ -3,8 +3,8 @@ use nom::{
     branch::alt,
     bytes::complete::tag,
     character::complete::{char, digit0, digit1, i32, i64, one_of},
-    combinator::{map, not, opt, peek, recognize, value},
-    sequence::{delimited, preceded},
+    combinator::{map, not, opt, peek, recognize, value, verify},
+    sequence::{delimited, preceded, terminated},
     Parser,
 };
 
@@ -24,6 +24,16 @@ pub fn real_value(input: Input<'_>) -> ParserResult<'_, ASN1Value> {
             map(tag(NOT_A_NUMBER), |_| f64::NAN),
         ))),
         ASN1Value::Real,
+    )
+    .parse(input)
+}
+
+// Keep integer tokens as integers until their ASN.1 type is known.
+pub(super) fn decimal_real_value(input: Input<'_>) -> ParserResult<'_, ASN1Value> {
+    skip_ws_and_comments(
+        verify(realnumber_token, |token: &str| token.contains(['.', 'e', 'E']))
+            .map_res(str::parse::<f64>)
+            .map(ASN1Value::Real),
     )
     .parse(input)
 }
@@ -63,6 +73,10 @@ pub fn real(input: Input<'_>) -> ParserResult<'_, ASN1Type> {
 /// A "number" is also a valid instance of "realnumber". In analyzing an instance of use of this
 /// notation, a "realnumber" is distinguished from a "number" by the context in which it appears.
 fn realnumber(input: Input<'_>) -> ParserResult<'_, f64> {
+    realnumber_token.map_res(str::parse::<f64>).parse(input)
+}
+
+fn realnumber_token(input: Input<'_>) -> ParserResult<'_, &'_ str> {
     into_inner(recognize((
         // Optional sign
         opt(char('-')),
@@ -74,11 +88,10 @@ fn realnumber(input: Input<'_>) -> ParserResult<'_, f64> {
             recognize((one_of("123456789"), digit0)),
         )),
         // Fractional part
-        opt((char('.'), digit0)),
+        opt((terminated(char('.'), not(peek(char('.')))), digit0)),
         // Exponent part
-        opt((alt((char('e'), char('E'))), opt(char('-')), digit1)),
+        opt((one_of("eE"), opt(one_of("+-")), digit1)),
     )))
-    .map_res(str::parse::<f64>)
     .parse(input)
 }
 
