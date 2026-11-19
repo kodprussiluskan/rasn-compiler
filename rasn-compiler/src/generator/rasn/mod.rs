@@ -241,7 +241,7 @@ impl Rasn {
     fn uses_wildcard_import(&self, import: &Import) -> bool {
         self.config.default_wildcard_imports
             || import.types.iter().any(|usage| {
-                usage.contains("{}") || usage.chars().all(|c| c.is_uppercase() || c == '-')
+                usage.chars().all(|c| c.is_uppercase() || c == '-')
             })
     }
 

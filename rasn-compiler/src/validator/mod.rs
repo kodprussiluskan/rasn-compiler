@@ -53,6 +53,47 @@ impl Validator {
         Self { modules }
     }
 
+    pub(crate) fn with_module_headers(
+        mut self,
+        headers: Vec<Rc<RefCell<ModuleHeader>>>,
+    ) -> Self {
+        for header in headers {
+            let name = header.borrow().name.clone();
+            self.modules.entry(name).or_default().header = Some(header);
+        }
+        self
+    }
+
+    fn filter_template_imports(&self) {
+        let mut filtered_headers = Vec::new();
+        for (name, contents) in &self.modules {
+            let Some(header) = &contents.header else { continue };
+            let scope = Scope::new(&self.modules, name);
+            let mut imports = header.borrow().imports.clone();
+            for import in &mut imports {
+                import.types.retain(|name| {
+                    let reference = DeclarationElsewhere {
+                        module: Some(import.global_module_reference.module_reference.clone()),
+                        identifier: name.trim_end_matches("{}").to_owned(),
+                        parent: None,
+                        constraints: Vec::new(),
+                    };
+                    !matches!(
+                        scope.get_template(&reference),
+                        Ok(ToplevelDefinition::Type(ToplevelTypeDefinition {
+                            parameterization: Some(_), ..
+                        }))
+                    )
+                });
+            }
+            imports.retain(|import| !import.types.is_empty());
+            filtered_headers.push((header, imports));
+        }
+        for (header, imports) in filtered_headers {
+            header.borrow_mut().imports = imports;
+        }
+    }
+
     fn link(mut self) -> Result<(Self, Vec<CompilerError>), LinkerError> {
         let mut warnings = vec![];
         // Values depend on linked types, so link them after all other definitions.
@@ -120,6 +161,9 @@ impl Validator {
             if tld.is_parameterized() || tld.has_constraint_reference() {
                 if let Err(error) = tld.link_constraint_reference(&scope) {
                     warn(error);
+                    if tld.is_parameterized() {
+                        continue;
+                    }
                 }
             }
             if let Err(error) = tld.collect_supertypes(&scope) {
@@ -137,6 +181,7 @@ impl Validator {
                 .definitions
                 .insert(name, tld);
         }
+        self.filter_template_imports();
         Ok((self, warnings))
     }
 

@@ -490,6 +490,7 @@ impl<B: Backend> Compiler<B, CompilerReady> {
         let mut generated_modules = vec![];
         let mut warnings = Vec::<CompilerError>::new();
         let mut modules: Vec<ToplevelDefinition> = vec![];
+        let mut module_headers = Vec::new();
         for src in &self.state.sources {
             let src_unit = src.try_into()?;
             modules.append(
@@ -497,6 +498,7 @@ impl<B: Backend> Compiler<B, CompilerReady> {
                     .into_iter()
                     .flat_map(|(header, tlds)| {
                         let header_ref = Rc::new(RefCell::new(header));
+                        module_headers.push(header_ref.clone());
                         tlds.into_iter().map(move |mut tld| {
                             tld.set_module_header(header_ref.clone());
                             tld
@@ -511,7 +513,7 @@ impl<B: Backend> Compiler<B, CompilerReady> {
                 definition.apply_tagging_environment(&header.borrow().tagging_environment);
             }
         }
-        let (valid_items, mut validator_errors) = Validator::new(modules).validate()?;
+        let (valid_items, mut validator_errors) = Validator::new(modules).with_module_headers(module_headers).validate()?;
         let modules = valid_items.into_iter().fold(
             BTreeMap::<String, Vec<ToplevelDefinition>>::new(),
             |mut modules, tld| {

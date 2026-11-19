@@ -1,6 +1,9 @@
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
-use crate::intermediate::{DeclarationElsewhere, ModuleHeader, ToplevelDefinition};
+use crate::intermediate::{
+    error::{GrammarError, GrammarErrorType},
+    DeclarationElsewhere, Exports, ModuleHeader, ToplevelDefinition,
+};
 
 #[derive(Default)]
 pub(super) struct Module {
@@ -146,6 +149,82 @@ impl<'a> Scope<'a> {
 
     pub fn get_type(&self, reference: &DeclarationElsewhere) -> Option<&'a ToplevelDefinition> {
         self.get_qualified(reference.module.as_deref(), &reference.identifier)
+    }
+
+    /// Resolves a parameterized assignment through the ASN.1 module boundary.
+    pub fn get_template(
+        &self,
+        reference: &DeclarationElsewhere,
+    ) -> Result<&'a ToplevelDefinition, GrammarError> {
+        let name = reference.identifier.as_str();
+        let error = |message: String| GrammarError::new(&message, GrammarErrorType::LinkerError);
+        if reference.module.is_none() {
+            if let Some(parameter) = self.parameters.and_then(|parameters| parameters.get(name)) {
+                return Ok(parameter);
+            }
+            if let Some(local) = self.local(self.module, name) {
+                return Ok(local);
+            }
+        }
+        let header = self.modules.get(self.module).and_then(|module| module.header.as_ref())
+            .ok_or_else(|| error(format!("Missing import of parameterized type {name}")))?;
+        let header = header.borrow();
+        let imports: Vec<_> = header.imports.iter().filter(|import| {
+            import.types.iter().any(|symbol| symbol == name || symbol.strip_suffix("{}") == Some(name))
+                && reference.module.as_ref().is_none_or(|module| {
+                    module == &import.global_module_reference.module_reference
+                })
+        }).collect();
+        if imports.len() != 1 {
+            let reason = if imports.is_empty() { "missing import" } else { "ambiguous import" };
+            return Err(error(format!("{reason} for parameterized type {name}")));
+        }
+        let import = imports[0];
+        if import.with.is_some() {
+            return Err(error(format!("Unsupported module selection for parameterized type {name}")));
+        }
+        self.exported_template(
+            &import.global_module_reference.module_reference,
+            name,
+            &mut Vec::new(),
+        )
+    }
+
+    fn exported_template(
+        &self,
+        module: &str,
+        name: &str,
+        visited: &mut Vec<String>,
+    ) -> Result<&'a ToplevelDefinition, GrammarError> {
+        let error = |message: String| GrammarError::new(&message, GrammarErrorType::LinkerError);
+        if visited.iter().any(|seen| seen == module) {
+            return Err(error(format!("Re-export cycle for parameterized type {module}.{name}")));
+        }
+        visited.push(module.to_owned());
+        let contents = self.modules.get(module)
+            .ok_or_else(|| error(format!("Missing module {module} for parameterized type {name}")))?;
+        let header = contents.header.as_ref()
+            .ok_or_else(|| error(format!("Missing module header for {module}")))?;
+        let header = header.borrow();
+        if matches!(&header.exports, Some(Exports::Identifier(names)) if !names.iter().any(|symbol| symbol == name)) {
+            return Err(error(format!("Module {module} does not export parameterized type {name}")));
+        }
+        let imports: Vec<_> = header.imports.iter().filter(|import| {
+            import.types.iter().any(|symbol| symbol == name || symbol.strip_suffix("{}") == Some(name))
+        }).collect();
+        if let Some(definition) = contents.definitions.get(name) {
+            if !imports.is_empty() {
+                return Err(error(format!("ambiguous re-export {module}.{name}")));
+            }
+            return Ok(definition);
+        }
+        if imports.len() != 1 {
+            return Err(error(format!("ambiguous or missing re-export {module}.{name}")));
+        }
+        if imports[0].with.is_some() {
+            return Err(error(format!("Unsupported module selection for parameterized type {module}.{name}")));
+        }
+        self.exported_template(&imports[0].global_module_reference.module_reference, name, visited)
     }
 
     pub fn visible_definitions(&self) -> impl Iterator<Item = &'a ToplevelDefinition> + '_ {

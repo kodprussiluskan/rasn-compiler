@@ -76,6 +76,10 @@ impl ToplevelDefinition {
                 .constraints()
                 .iter()
                 .any(|c| matches!(c, Constraint::Parameter(_))),
+            ToplevelDefinition::Type(ToplevelTypeDefinition {
+                ty: ASN1Type::ElsewhereDeclaredType(reference),
+                ..
+            }) => reference.constraints.iter().any(|constraint| matches!(constraint, Constraint::Parameter(_))),
             _ => false,
         }
     }
@@ -463,13 +467,13 @@ impl ASN1Type {
         args: &[Parameter],
     ) -> Result<ASN1Type, GrammarError> {
         let identifier = &reference.identifier;
-        match tlds.get_type(reference) {
-            Some(ToplevelDefinition::Type(ToplevelTypeDefinition {
+        match tlds.get_template(reference)? {
+            ToplevelDefinition::Type(ToplevelTypeDefinition {
                 ty,
                 module_header,
                 parameterization: Some(Parameterization { parameters }),
                 ..
-            })) => {
+            }) => {
                 let mut impl_template = ty.clone();
                 let mut arguments = BTreeMap::new();
                 let mut table_constraint_replacements = BTreeMap::new();

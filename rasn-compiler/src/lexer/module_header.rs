@@ -7,7 +7,7 @@ use nom::{
     bytes::complete::{tag, take_until},
     character::complete::{char, one_of},
     combinator::{into, map, not, opt, peek, recognize, value},
-    multi::{many0, many1, separated_list1},
+    multi::{many0, many1, separated_list0, separated_list1},
     sequence::{delimited, pair, preceded, separated_pair, terminated},
     Parser,
 };
@@ -59,12 +59,12 @@ fn exports(input: Input<'_>) -> ParserResult<'_, Exports> {
         tag(EXPORTS),
         skip_ws(alt((
             value(Exports::All, tag(ALL)),
-            into(separated_list1(
-                skip_ws(char(COMMA)),
-                skip_ws(alt((parameterized_identifier, identifier))),
+            into(separated_list0(
+                skip_ws_and_comments(char(COMMA)),
+                skip_ws_and_comments(alt((parameterized_identifier, identifier))),
             )),
         ))),
-        char(SEMICOLON),
+        skip_ws_and_comments(char(SEMICOLON)),
     ))
     .parse(input)
 }
@@ -79,7 +79,11 @@ fn imports(input: Input<'_>) -> ParserResult<'_, Vec<Import>> {
 }
 
 fn parameterized_identifier(input: Input<'_>) -> ParserResult<'_, &str> {
-    terminated(identifier, tag("{}")).parse(input)
+    terminated(
+        identifier,
+        in_braces(skip_ws_and_comments(nom::combinator::success(()))),
+    )
+    .parse(input)
 }
 
 fn global_module_reference(input: Input<'_>) -> ParserResult<'_, GlobalModuleReference> {
@@ -193,6 +197,20 @@ mod tests {
     use std::vec;
 
     use crate::lexer::module_header::*;
+
+    #[test]
+    fn normalizes_template_symbols() {
+        for symbol in ["List", "List{}", "List { }", "List { /* marker */ }"] {
+            let source = format!(
+                "Consumer DEFINITIONS ::= BEGIN EXPORTS {symbol}; IMPORTS {symbol} FROM Origin;"
+            );
+            let (_, header) = module_header(source.as_str().into()).unwrap();
+            assert_eq!(header.exports, Some(Exports::Identifier(vec!["List".into()])));
+            assert_eq!(header.imports[0].types, ["List"]);
+        }
+        let (_, header) = module_header("Empty DEFINITIONS ::= BEGIN EXPORTS;".into()).unwrap();
+        assert_eq!(header.exports, Some(Exports::Identifier(vec![])));
+    }
 
     #[test]
     fn parses_a_module_header() {

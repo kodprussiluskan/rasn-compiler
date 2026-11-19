@@ -91,8 +91,7 @@ impl Backend for Typescript {
                         to_jer_identifier(&import.global_module_reference.module_reference);
                     let mut usages = vec![];
                     for usage in &import.types {
-                        if !usage.contains("{}")
-                            && !usage.chars().all(|c| c.is_uppercase() || c == '-')
+                        if !usage.chars().all(|c| c.is_uppercase() || c == '-')
                             && !module.has_conflicting_import(usage)
                             && !tlds.iter().any(|definition| definition.name() == usage)
                         {
