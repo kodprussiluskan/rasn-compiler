@@ -48,6 +48,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0](https://github.com/kodprussiluskan/rasn-compiler/compare/rasn-compiler-v0.16.0...rasn-compiler-v0.17.0) - 2026-11-19
+
+### Added
+
+- *(generator)* impl `Display` for `GeneratorErrorType`
+- *(generator)* Nicer `Display` for `GeneratorError`
+- *(bin)* Output diagnostics to stderr
+- *(rasn-generator)* TeletexString & UniversalString values
+- Impl Constrainable for more ASN1Type's
+
+### Fixed
+
+- *(lexer)* Remove Object identifier value type prefix
+- fix issue where #[rasn(automatic_tags)] is not applied to tagged CHOICE and SEQUENCE
+
+### Other
+
+- Merge pull request #204 from Rawk/dedup-IntegerType-to-tokens
+- Merge pull request #203 from Rawk/infallible-rasn-format_name_and_common_annotations
+- Merge pull request #201 from Rawk/rasn-default_method_name-return-ident
+- Merge pull request #199 from Rawk/rasn-generate-type
+- remove regex dependency
+- Merge branch 'main' into pr/fix-automatic-tag-on-choice
+- Merge branch 'main' into fix_visiblestring
+- Merge pull request #190 from Rawk/perf-character-set
+- Merge pull request #189 from Rawk/perf-required-derives
+- Merge pull request #188 from Rawk/string-types
+- Merge pull request #186 from Rawk/constrainable
+- Deduplicate `to_token_stream` for `IntegerType`
+- *(generator)* Infallible `Rasn::format_name_and_common_annotations`
+- *(rasn-generator)* Rasn::default_method_name return Ident
+- Merge pull request #197 from Rawk/diagnostics-to-stderr
+- *(rasn-generator)* Move out `generate_type` from `generate_tld`
+- *(bin)* Remove unused import
+- remove regex in `until_next_unindented`
+- use explicit tagging for untagged choice type, as specified in X.680 section 31.2.7
+- Fix VisibleString character set to follow X.680 ISO/IEC 646 definition
+- *(rasn-generator)* Cache character set generation
+- *(rasn-generator)* Better handling of `Config::type_annotations`
+- *(rasn-generator)* Reuse `Rasn::string_type`
+- Infallible `Rasn::format_comments`
+- Return slice from `Constrainable::constraints`
+
 ## [0.16.0](https://github.com/librasn/compiler/compare/rasn-compiler-v0.15.0...rasn-compiler-v0.16.0) - 2025-12-31
 
 ### Other
