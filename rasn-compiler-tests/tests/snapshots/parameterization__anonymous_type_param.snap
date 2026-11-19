@@ -17,9 +17,11 @@ pub mod test_module {
     use std::sync::LazyLock;
     #[doc = " Inner type "]
     #[derive(AsnType, Debug, Clone, Decode, Encode, PartialEq, Eq, Hash, Copy)]
-    #[rasn(choice, automatic_tags)]
+    #[rasn(choice)]
     pub enum LocationMeasurementIndicationIEsMeasurementIndication {
+        #[rasn(tag(context, 0))]
         release(()),
+        #[rasn(tag(explicit(context, 1)))]
         setup(LocationMeasurementInfo),
     }
     #[doc = " Inner type "]

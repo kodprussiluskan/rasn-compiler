@@ -158,7 +158,7 @@ fn validator_io(literal: &str) -> (String, String) {
             })
         })
         .collect::<Vec<_>>();
-    let (expected_output, warnings) = Validator::new(input.clone()).validate().unwrap();
+    let (expected_output, warnings) = Validator::new(input.clone()).validate(false).unwrap();
     assert!(warnings.is_empty());
     (as_decl_string(input), as_decl_string(expected_output))
 }

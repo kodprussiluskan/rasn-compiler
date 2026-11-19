@@ -16,6 +16,7 @@ use super::{
     asn1_type, asn1_value,
     common::{identifier, in_braces, skip_ws_and_comments},
     error::ParserResult,
+    tagged_type,
     information_object_class::{information_object, object_set},
     value_reference,
 };
@@ -46,7 +47,10 @@ pub fn parameters(input: Input<'_>) -> ParserResult<'_, Vec<Parameter>> {
         char(COMMA),
         skip_ws_and_comments(alt((
             map(asn1_value, Parameter::ValueParameter),
-            map(asn1_type, Parameter::TypeParameter),
+            map(tagged_type, |(tag, ty)| match tag {
+                Some(tag) => Parameter::TaggedTypeParameter(tag, ty),
+                None => Parameter::TypeParameter(ty),
+            }),
             map(object_set, Parameter::ObjectSetParameter),
             map(information_object, |o| {
                 Parameter::InformationObjectParameter(o)

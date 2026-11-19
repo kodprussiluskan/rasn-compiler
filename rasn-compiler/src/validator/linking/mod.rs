@@ -11,20 +11,17 @@ mod utils;
 
 use std::{
     borrow::{BorrowMut, Cow},
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
 };
 
 use crate::{
     common::INTERNAL_NESTED_TYPE_NAME_PREFIX,
     intermediate::{error::*, information_object::*, types::*, utils::*, *},
-    validator::{
-        linking::utils::bit_string_to_octet_string,
-        parameterization::{Parameterization, ParameterizationArgument},
-    },
+    validator::linking::utils::bit_string_to_octet_string,
 };
 
 use self::{
-    parameterization::ParameterGovernor,
+    specialization::{needs_explicit_specialization_tag, specialize_component_tag},
     utils::{find_tld_or_enum_value_by_name, octet_string_to_bit_string},
 };
 
@@ -35,6 +32,8 @@ macro_rules! grammar_error {
         GrammarError::new(&format!($($arg)*), GrammarErrorType::$kind)
     };
 }
+
+mod specialization;
 
 impl ToplevelDefinition {
     pub(crate) fn is_parameterized(&self) -> bool {
@@ -387,13 +386,28 @@ impl ASN1Type {
         tlds: &Scope<'_>,
     ) -> Result<Option<ASN1Type>, GrammarError> {
         let mut self_replacement = None;
-        match self {
+        match &mut *self {
             ASN1Type::Null => (),
+            ASN1Type::Jer(_, ty) => {
+                if let Some(replacement) = ty.link_constraint_reference(name, tlds)? {
+                    **ty = replacement;
+                }
+            }
             ASN1Type::Choice(c) => {
                 for b in c.constraints.iter_mut() {
                     b.link_cross_reference(name, tlds)?;
                 }
-                for opt in c.options.iter_mut() {
+                let automatic = tlds.in_expansion()
+                    && tlds.tagging_environment() == TaggingEnvironment::Automatic
+                    && c.options.iter().all(|option| option.tag.is_none())
+                    && (tlds.output_tagging_environment() != TaggingEnvironment::Automatic
+                        || c.options
+                            .iter()
+                            .any(|option| needs_explicit_specialization_tag(&option.ty, tlds)));
+                for (index, opt) in c.options.iter_mut().enumerate() {
+                    if tlds.in_expansion() {
+                        specialize_component_tag(&mut opt.tag, &opt.ty, tlds, automatic, index);
+                    }
                     if let Some(replacement) = opt.ty.link_constraint_reference(name, tlds)? {
                         opt.ty = replacement;
                     }
@@ -409,7 +423,25 @@ impl ASN1Type {
                 for b in s.constraints.iter_mut() {
                     b.link_cross_reference(name, tlds)?;
                 }
-                for m in s.members.iter_mut() {
+                let automatic = tlds.in_expansion()
+                    && tlds.tagging_environment() == TaggingEnvironment::Automatic
+                    && s.members.iter().all(|member| member.tag.is_none())
+                    && (tlds.output_tagging_environment() != TaggingEnvironment::Automatic
+                        || s.members
+                            .iter()
+                            .any(|member| needs_explicit_specialization_tag(&member.ty, tlds)));
+                for (index, m) in s.members.iter_mut().enumerate() {
+                    if tlds.in_expansion() {
+                        specialize_component_tag(&mut m.tag, &m.ty, tlds, automatic, index);
+                    }
+                    for constraint in &mut m.constraints {
+                        constraint.link_cross_reference(name, tlds)?;
+                    }
+                    if tlds.in_expansion() {
+                        if let Some(default) = m.optionality.default_mut() {
+                            default.resolve_specialization_value(tlds)?;
+                        }
+                    }
                     if let Some(replacement) = m.ty.link_constraint_reference(name, tlds)? {
                         m.ty = replacement;
                     }
@@ -429,15 +461,30 @@ impl ASN1Type {
                     .iter()
                     .find(|c| matches![c, Constraint::Parameter(_)])
                 {
-                    self_replacement = Some(Self::resolve_parameters(
-                        e,
-                        tlds,
-                        args,
-                    )?);
+                    self_replacement = Some(Self::resolve_parameters(e, tlds, args)?);
                 } else {
                     let id_clone = e.identifier.clone();
                     for c in e.constraints_mut() {
                         c.link_cross_reference(&id_clone, tlds)?;
+                    }
+                    if tlds.in_expansion() {
+                        e.check_ambiguity(tlds)?;
+                        if let Some(ToplevelDefinition::Type(actual)) = e
+                            .module
+                            .is_none()
+                            .then(|| tlds.parameter(&e.identifier))
+                            .flatten()
+                        {
+                            let mut ty = actual.ty.clone();
+                            if let Some(constraints) = ty.constraints_mut() {
+                                constraints.extend(e.constraints.iter().cloned());
+                            }
+                            self_replacement = Some(ty);
+                        } else if e.module.is_none() {
+                            e.module = tlds
+                                .reference_module(None, &e.identifier)
+                                .map(str::to_owned);
+                        }
                     }
                 }
             }
@@ -458,104 +505,25 @@ impl ASN1Type {
                 }
             }
         }
+        if self_replacement.is_none()
+            && tlds.in_expansion()
+            && tlds.tagging_environment() != TaggingEnvironment::Automatic
+            && tlds.output_tagging_environment() == TaggingEnvironment::Automatic
+            && matches!(
+                self,
+                ASN1Type::Sequence(_) | ASN1Type::Set(_) | ASN1Type::Choice(_)
+            )
+        {
+            self.collect_supertypes(tlds)?;
+            self_replacement = Some(tlds.materialize_type(
+                std::mem::replace(self, ASN1Type::Null),
+                None,
+                Some(tlds.tagging_environment()),
+            )?);
+        }
         Ok(self_replacement)
     }
 
-    pub(in crate::validator) fn resolve_parameters(
-        reference: &DeclarationElsewhere,
-        tlds: &Scope<'_>,
-        args: &[Parameter],
-    ) -> Result<ASN1Type, GrammarError> {
-        let identifier = &reference.identifier;
-        match tlds.get_template(reference)? {
-            ToplevelDefinition::Type(ToplevelTypeDefinition {
-                ty,
-                module_header,
-                parameterization: Some(Parameterization { parameters }),
-                ..
-            }) => {
-                let mut impl_template = ty.clone();
-                let mut arguments = BTreeMap::new();
-                let mut table_constraint_replacements = BTreeMap::new();
-                for (
-                    index,
-                    ParameterizationArgument {
-                        dummy_reference,
-                        param_governor,
-                    },
-                ) in parameters.iter().enumerate()
-                {
-                    let arg = args.get(index).ok_or_else(|| grammar_error!(LinkerError, "Did not find an argument for parameter {dummy_reference} of {identifier}"))?;
-                    match (arg, param_governor) {
-                        (Parameter::ValueParameter(v), ParameterGovernor::TypeOrClass(gov)) => {
-                            arguments.insert(
-                                dummy_reference.clone(),
-                                ToplevelDefinition::Value(ToplevelValueDefinition::from((
-                                    dummy_reference.as_str(),
-                                    v.clone(),
-                                    gov.clone(),
-                                ))),
-                            );
-                        }
-                        (Parameter::TypeParameter(t), _) => {
-                            arguments.insert(
-                                dummy_reference.clone(),
-                                ToplevelDefinition::Type(ToplevelTypeDefinition::from((
-                                    dummy_reference.as_str(),
-                                    t.clone(),
-                                ))),
-                            );
-                        }
-                        (Parameter::InformationObjectParameter(_), _) => todo!(),
-                        (Parameter::ObjectSetParameter(o), ParameterGovernor::Class(c)) => {
-                            match &o.values.first() {
-                                    Some(osv) if o.values.len() == 1 => {
-                                        #[allow(suspicious_double_ref_op)]
-                                        table_constraint_replacements.insert(dummy_reference, osv.clone());
-                                    }
-                                    _ => return Err(grammar_error!(LinkerError, "Expected object set value argument to contain single object set value!"))
-                                }
-                            let mut info = ASN1Information::ObjectSet(o.clone());
-                            info.link_object_set_reference(tlds);
-                            let mut tld = ToplevelInformationDefinition::from((
-                                dummy_reference.as_str(),
-                                info,
-                                c.as_str(),
-                            ));
-                            tld.resolve_class_reference(tlds);
-                            arguments
-                                .insert(dummy_reference.clone(), ToplevelDefinition::Object(tld));
-                        }
-                        _ => {
-                            return Err(grammar_error!(
-                            LinkerError,
-                            "Mismatching argument for parameter {dummy_reference} of {identifier}"
-                        ))
-                        }
-                    }
-                }
-                let template_scope = tlds.for_definition(module_header.as_ref());
-                let impl_tlds = template_scope.with_parameters(&arguments);
-                impl_template.link_elsewhere_declared(&impl_tlds)?;
-                if let Some(replacement) =
-                    impl_template.link_constraint_reference(identifier, &impl_tlds)?
-                {
-                    impl_template = replacement;
-                };
-                impl_template
-                    .collect_supertypes(&impl_tlds)
-                    .or_else(|_| impl_template.collect_supertypes(&template_scope))?;
-                for (dummy_reference, osv) in table_constraint_replacements {
-                    impl_template.reassign_table_constraint(dummy_reference, osv)?;
-                }
-                Ok(impl_template)
-            }
-            _ => Err(grammar_error!(
-                LinkerError,
-                "Failed to resolve supertype {identifier} of parameterized implementation."
-            )),
-        }
-    }
 
     /// Checks if at any depth down the arbitrarily nested `self`, an elsewhere declared type with the name `name` exists.
     /// Sequence Ofs and Set Ofs break the recursion tree, because they use heap-based data structures.
@@ -706,59 +674,52 @@ impl ASN1Type {
         }
     }
 
-    fn link_elsewhere_declared(
-        &mut self,
-        tlds: &Scope<'_>,
-    ) -> Result<(), GrammarError> {
+    pub(in crate::validator) fn has_parameter_application(&self) -> bool {
         match self {
-            ASN1Type::Choice(c) => c
+            Self::Jer(_, ty) => ty.has_parameter_application(),
+            Self::Choice(choice) => choice
                 .options
-                .iter_mut()
-                .try_for_each(|o| o.ty.link_elsewhere_declared(tlds)),
-            ASN1Type::Set(s) | ASN1Type::Sequence(s) => s
+                .iter()
+                .any(|member| member.ty.has_parameter_application()),
+            Self::Sequence(sequence) | Self::Set(sequence) => sequence
                 .members
-                .iter_mut()
-                .try_for_each(|o| o.ty.link_elsewhere_declared(tlds)),
-            ASN1Type::SequenceOf(s) | ASN1Type::SetOf(s) => {
-                s.element_type.link_elsewhere_declared(tlds)
+                .iter()
+                .any(|member| member.ty.has_parameter_application()),
+            Self::SequenceOf(collection) | Self::SetOf(collection) => {
+                collection.element_type.has_parameter_application()
             }
-            ASN1Type::ElsewhereDeclaredType(e) => {
-                if let Some(ToplevelDefinition::Type(tld)) = tlds.get_type(e) {
-                    *self = tld.ty.clone();
-                    Ok(())
-                } else {
-                    Err(grammar_error!(
-                        LinkerError,
-                        "Failed to resolve argument {} of parameterized implementation.",
-                        e.identifier
-                    ))
-                }
-            }
-            ASN1Type::ObjectClassField(ocf) => {
-                if let Some(ToplevelDefinition::Class(c)) = tlds.get(&ocf.class) {
-                    if let Some(field) = c.definition.get_field(&ocf.field_path) {
-                        if let Some(ref ty) = field.ty {
-                            *self = ty.clone();
-                        }
-                        return Ok(());
-                    }
-                }
-                Err(grammar_error!(
-                    LinkerError,
-                    "Failed to resolve argument {}.{} of parameterized implementation.",
-                    ocf.class,
-                    ocf.field_path
-                        .iter()
-                        .map(|f| f.identifier().clone())
-                        .collect::<Vec<_>>()
-                        .join(".")
-                ))
-            }
-            ASN1Type::ChoiceSelectionType(_) => Err(grammar_error!(
-                LinkerError,
-                "Linking choice selection type is not yet supported!"
-            )),
-            _ => Ok(()),
+            Self::ElsewhereDeclaredType(reference) => reference
+                .constraints
+                .iter()
+                .any(|constraint| matches!(constraint, Constraint::Parameter(_))),
+            _ => false,
+        }
+    }
+
+    pub(in crate::validator) fn references_failed_type(
+        &self,
+        scope: &Scope<'_>,
+        failed: &HashSet<(String, String)>,
+    ) -> bool {
+        match self {
+            Self::Jer(_, ty) => ty.references_failed_type(scope, failed),
+            Self::Choice(choice) => choice
+                .options
+                .iter()
+                .any(|member| member.ty.references_failed_type(scope, failed)),
+            Self::Sequence(sequence) | Self::Set(sequence) => sequence
+                .members
+                .iter()
+                .any(|member| member.ty.references_failed_type(scope, failed)),
+            Self::SequenceOf(collection) | Self::SetOf(collection) => collection
+                .element_type
+                .references_failed_type(scope, failed),
+            Self::ElsewhereDeclaredType(reference) => scope
+                .reference_module(reference.module.as_deref(), &reference.identifier)
+                .is_some_and(|module| {
+                    failed.contains(&(module.to_owned(), reference.identifier.clone()))
+                }),
+            _ => false,
         }
     }
 
@@ -1644,6 +1605,9 @@ impl ASN1Value {
                 parent: Some(_), ..
             } => {
                 return self.resolve_elsewhere_with_parent(tlds);
+            }
+            Self::ElsewhereDeclaredValue { .. } if tlds.in_expansion() => {
+                self.resolve_specialization_value(tlds)?;
             }
             Self::ElsewhereDeclaredValue {
                 module: _,

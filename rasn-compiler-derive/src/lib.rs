@@ -31,11 +31,17 @@ pub fn asn1(input: TokenStream) -> TokenStream {
         v => String::from(DUMMY_HEADER) + &v + DUMMY_FOOTER,
     };
 
-    rasn_compiler::Compiler::<RasnBackend, _>::new()
+    match rasn_compiler::Compiler::<RasnBackend, _>::new()
         .add_asn_literal(literal_asn1)
-        .compile_to_string()
-        .unwrap()
-        .generated
-        .parse()
-        .unwrap()
+        .compile_to_string_strict()
+    {
+        Ok(result) => result.generated.parse().unwrap_or_else(|error| {
+            syn::Error::new(config.asn.span(), error)
+                .to_compile_error()
+                .into()
+        }),
+        Err(error) => syn::Error::new(config.asn.span(), error)
+            .to_compile_error()
+            .into(),
+    }
 }

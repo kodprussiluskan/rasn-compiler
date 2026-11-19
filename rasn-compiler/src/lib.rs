@@ -411,6 +411,12 @@ impl<B: Backend> Compiler<B, CompilerSourcesSet> {
         self.set_output_mode(OutputMode::NoOutput)
             .compile_to_string()
     }
+
+    /// Compiles bindings and rejects invalid parameterized type specializations.
+    pub fn compile_to_string_strict(self) -> Result<CompileResult, CompilerError> {
+        let mut compiler = self.set_output_mode(OutputMode::NoOutput);
+        compiler.internal_compile(true).map(CompileResult::fmt::<B>)
+    }
 }
 
 impl<B: Backend> Compiler<B, CompilerReady> {
@@ -471,7 +477,7 @@ impl<B: Backend> Compiler<B, CompilerReady> {
     /// * _Ok_  - tuple containing the stringified bindings for the ASN1 spec as well as a vector of warnings raised during the compilation
     /// * _Err_ - Unrecoverable error, no bindings were generated
     pub fn compile_to_string(mut self) -> Result<CompileResult, CompilerError> {
-        self.internal_compile().map(CompileResult::fmt::<B>)
+        self.internal_compile(false).map(CompileResult::fmt::<B>)
     }
 
     /// Runs the rasn compiler command.
@@ -479,14 +485,17 @@ impl<B: Backend> Compiler<B, CompilerReady> {
     /// * _Ok_  - Vector of warnings raised during the compilation
     /// * _Err_ - Unrecoverable error, no bindings were generated
     pub fn compile(mut self) -> Result<Vec<CompilerError>, CompilerError> {
-        let result = self.internal_compile()?.fmt::<B>();
+        let result = self.internal_compile(false)?.fmt::<B>();
 
         self.output_generated(&result.generated)?;
 
         Ok(result.warnings)
     }
 
-    fn internal_compile(&mut self) -> Result<CompileResult, CompilerError> {
+    fn internal_compile(
+        &mut self,
+        strict_specialization: bool,
+    ) -> Result<CompileResult, CompilerError> {
         let mut generated_modules = vec![];
         let mut warnings = Vec::<CompilerError>::new();
         let mut modules: Vec<ToplevelDefinition> = vec![];
@@ -513,7 +522,9 @@ impl<B: Backend> Compiler<B, CompilerReady> {
                 definition.apply_tagging_environment(&header.borrow().tagging_environment);
             }
         }
-        let (valid_items, mut validator_errors) = Validator::new(modules).with_module_headers(module_headers).validate()?;
+        let (valid_items, mut validator_errors) = Validator::new(modules)
+            .with_module_headers(module_headers)
+            .validate(strict_specialization)?;
         let modules = valid_items.into_iter().fold(
             BTreeMap::<String, Vec<ToplevelDefinition>>::new(),
             |mut modules, tld| {

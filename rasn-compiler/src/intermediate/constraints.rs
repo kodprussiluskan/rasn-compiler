@@ -5,7 +5,7 @@ use std::error::Error;
 use super::{
     error::{GrammarError, GrammarErrorType},
     information_object::{InformationObjectFields, ObjectSet},
-    ASN1Type, ASN1Value, IntegerType,
+    ASN1Type, ASN1Value, AsnTag, IntegerType,
 };
 
 #[derive(Debug, PartialEq)]
@@ -146,6 +146,7 @@ pub enum ContentConstraint {
 pub enum Parameter {
     ValueParameter(ASN1Value),
     TypeParameter(ASN1Type),
+    TaggedTypeParameter(AsnTag, ASN1Type),
     InformationObjectParameter(InformationObjectFields),
     ObjectSetParameter(ObjectSet),
 }

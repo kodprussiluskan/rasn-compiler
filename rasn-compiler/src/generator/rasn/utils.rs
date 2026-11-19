@@ -1321,7 +1321,12 @@ impl Rasn {
     /// If qualified with a module, then path is `super::#module::#ty`, else it is just `#ty`.
     pub(crate) fn to_rust_qualified_type(&self, module: Option<&str>, ty: &str) -> TokenStream {
         let ty = self.to_rust_title_case(ty);
-        if let Some(module) = module {
+        if let Some(module) = module.filter(|module| {
+            !self
+                .copy_module
+                .as_ref()
+                .is_some_and(|current| current.name == *module)
+        }) {
             let module = self.to_rust_snake_case(module).to_token_stream();
             quote!(super::#module::#ty)
         } else {

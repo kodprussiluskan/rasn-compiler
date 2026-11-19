@@ -2,7 +2,8 @@ use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 use crate::intermediate::{
     error::{GrammarError, GrammarErrorType},
-    DeclarationElsewhere, Exports, ModuleHeader, ToplevelDefinition,
+    ASN1Type, AsnTag, DeclarationElsewhere, Exports, ModuleHeader, TaggingEnvironment,
+    ToplevelDefinition, ToplevelTypeDefinition,
 };
 
 #[derive(Default)]
@@ -18,6 +19,14 @@ pub(super) struct Scope<'a> {
     linking: Option<(&'a str, &'a str)>,
     value_module: &'a str,
     parameters: Option<&'a BTreeMap<String, ToplevelDefinition>>,
+    expansion: Option<&'a Expansion<'a>>,
+    resolving_actual: bool,
+    generated: Option<&'a RefCell<Vec<ToplevelTypeDefinition>>>,
+}
+
+pub(super) struct Expansion<'a> {
+    template: &'a ToplevelDefinition,
+    parent: Option<&'a Expansion<'a>>,
 }
 
 impl<'a> Scope<'a> {
@@ -28,12 +37,18 @@ impl<'a> Scope<'a> {
             linking: None,
             value_module: module,
             parameters: None,
+            expansion: None,
+            resolving_actual: false,
+            generated: None,
         }
     }
 
     pub fn in_module(&self, module: &'a str) -> Self {
         Self {
             linking: self.linking,
+            expansion: self.expansion,
+            resolving_actual: self.resolving_actual,
+            generated: self.generated,
             ..Self::new(self.modules, module)
         }
     }
@@ -75,6 +90,112 @@ impl<'a> Scope<'a> {
             parameters: Some(parameters),
             ..*self
         }
+    }
+
+    pub fn parameter(&self, name: &str) -> Option<&'a ToplevelDefinition> {
+        self.parameters?.get(name)
+    }
+
+    pub fn expansion_for(&self, template: &'a ToplevelDefinition) -> Option<Expansion<'a>> {
+        let mut ancestor = self.expansion;
+        while let Some(expansion) = ancestor {
+            if std::ptr::eq(expansion.template, template) {
+                return None;
+            }
+            ancestor = expansion.parent;
+        }
+        Some(Expansion {
+            template,
+            parent: self.expansion,
+        })
+    }
+
+    pub fn with_expansion(&self, expansion: &'a Expansion<'a>) -> Self {
+        Self {
+            expansion: Some(expansion),
+            ..*self
+        }
+    }
+
+    pub fn for_actual(&self) -> Self {
+        Self {
+            resolving_actual: true,
+            ..*self
+        }
+    }
+
+    pub fn in_expansion(&self) -> bool {
+        self.resolving_actual || self.expansion.is_some()
+    }
+
+    pub fn with_generated_types(
+        &self,
+        generated: &'a RefCell<Vec<ToplevelTypeDefinition>>,
+    ) -> Self {
+        Self {
+            generated: Some(generated),
+            ..*self
+        }
+    }
+
+    fn module_tagging_environment(&self, name: &str) -> TaggingEnvironment {
+        self.modules
+            .get(name)
+            .and_then(|module| module.header.as_ref())
+            .map_or(TaggingEnvironment::default(), |header| {
+                header.borrow().tagging_environment
+            })
+    }
+
+    pub fn tagging_environment(&self) -> TaggingEnvironment {
+        self.module_tagging_environment(self.module)
+    }
+
+    pub fn output_tagging_environment(&self) -> TaggingEnvironment {
+        self.module_tagging_environment(self.linking.map_or(self.module, |(module, _)| module))
+    }
+
+    pub fn materialize_type(
+        &self,
+        ty: ASN1Type,
+        tag: Option<AsnTag>,
+        environment: Option<TaggingEnvironment>,
+    ) -> Result<ASN1Type, GrammarError> {
+        let (Some(generated), Some((module, declaration))) = (self.generated, self.linking) else {
+            return Err(GrammarError::new(
+                "No declaration owns the tagged specialization",
+                GrammarErrorType::LinkerError,
+            ));
+        };
+        let mut generated = generated.borrow_mut();
+        let mut index = generated.len() + 1;
+        let name = loop {
+            let name = format!("{declaration}-Specialization-{index}");
+            if self.local(module, &name).is_none()
+                && !generated.iter().any(|definition| definition.name == name)
+            {
+                break name;
+            }
+            index += 1;
+        };
+        let mut definition = ToplevelTypeDefinition::from((name.as_str(), ty));
+        definition.tag = tag;
+        definition.module_header = self
+            .modules
+            .get(module)
+            .and_then(|module| module.header.clone());
+        if let (Some(environment), Some(header)) = (environment, &definition.module_header) {
+            let mut header = header.borrow().clone();
+            header.tagging_environment = environment;
+            definition.module_header = Some(Rc::new(RefCell::new(header)));
+        }
+        generated.push(definition);
+        Ok(ASN1Type::ElsewhereDeclaredType(DeclarationElsewhere {
+            parent: None,
+            module: Some(module.to_owned()),
+            identifier: name,
+            constraints: vec![],
+        }))
     }
 
     fn local(&self, module: &str, name: &str) -> Option<&'a ToplevelDefinition> {

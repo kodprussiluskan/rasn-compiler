@@ -295,6 +295,11 @@ impl Rasn {
             }).collect::<Vec<_>>();
             let (pdus, warnings): (Vec<TokenStream>, Vec<CompilerError>) =
                 tlds.into_iter().fold((vec![], vec![]), |mut acc, tld| {
+                    self.tagging_environment = tld
+                        .get_module_header()
+                        .map_or(module.tagging_environment, |header| {
+                            header.borrow().tagging_environment
+                        });
                     let generated = real_constants
                         .remove(tld.name())
                         .unwrap_or_else(|| self.generate_tld(tld));

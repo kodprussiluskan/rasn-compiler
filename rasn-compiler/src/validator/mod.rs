@@ -36,6 +36,7 @@ use self::{
 
 pub struct Validator {
     modules: BTreeMap<String, Module>,
+    specialization_errors: Vec<LinkerError>,
 }
 
 impl Validator {
@@ -50,7 +51,10 @@ impl Validator {
             module.header = header;
             module.definitions.insert(tld.name().to_owned(), tld);
         }
-        Self { modules }
+        Self {
+            modules,
+            specialization_errors: Vec::new(),
+        }
     }
 
     pub(crate) fn with_module_headers(
@@ -64,7 +68,7 @@ impl Validator {
         self
     }
 
-    fn filter_template_imports(&self) {
+    fn filter_template_imports(&self, failed: &HashSet<(String, String)>) {
         let mut filtered_headers = Vec::new();
         for (name, contents) in &self.modules {
             let Some(header) = &contents.header else { continue };
@@ -72,15 +76,27 @@ impl Validator {
             let mut imports = header.borrow().imports.clone();
             for import in &mut imports {
                 import.types.retain(|name| {
+                    if !failed.is_empty()
+                        && failed.contains(&(import.global_module_reference.module_reference.clone(), name.clone()))
+                    {
+                        return false;
+                    }
                     let reference = DeclarationElsewhere {
                         module: Some(import.global_module_reference.module_reference.clone()),
                         identifier: name.trim_end_matches("{}").to_owned(),
                         parent: None,
                         constraints: Vec::new(),
                     };
+                    let definition = scope.get_template(&reference).ok().or_else(|| {
+                        let module = reference.module.as_deref()?;
+                        self.modules
+                            .get(module)?
+                            .definitions
+                            .get(&reference.identifier)
+                    });
                     !matches!(
-                        scope.get_template(&reference),
-                        Ok(ToplevelDefinition::Type(ToplevelTypeDefinition {
+                        definition,
+                        Some(ToplevelDefinition::Type(ToplevelTypeDefinition {
                             parameterization: Some(_), ..
                         }))
                     )
@@ -90,7 +106,15 @@ impl Validator {
             filtered_headers.push((header, imports));
         }
         for (header, imports) in filtered_headers {
-            header.borrow_mut().imports = imports;
+            let module = header.borrow().name.clone();
+            header.borrow_mut().imports = imports.clone();
+            for definition in self.modules[&module].definitions.values() {
+                if let Some(definition_header) = definition.get_module_header() {
+                    if !Rc::ptr_eq(header, &definition_header) {
+                        definition_header.borrow_mut().imports = imports.clone();
+                    }
+                }
+            }
         }
     }
 
@@ -116,6 +140,7 @@ impl Validator {
                 .then_with(|| a.2.cmp(&b.2))
         });
         let mut visited_headers = HashSet::new();
+        let mut failed = HashSet::new();
         while let Some((_, name, module)) = keys.pop() {
             let mut tld = self
                 .modules
@@ -124,7 +149,18 @@ impl Validator {
                 .definitions
                 .remove(&name)
                 .unwrap();
-            let scope = Scope::new(&self.modules, &module).while_linking(&name);
+            if matches!(&tld, ToplevelDefinition::Type(ty) if ty.parameterization.is_some()) {
+                self.modules
+                    .get_mut(&module)
+                    .unwrap()
+                    .definitions
+                    .insert(name, tld);
+                continue;
+            }
+            let generated_types = RefCell::new(Vec::new());
+            let scope = Scope::new(&self.modules, &module)
+                .while_linking(&name)
+                .with_generated_types(&generated_types);
             let mut warn = |error: crate::intermediate::error::GrammarError| {
                 let mut error = LinkerError::from(error);
                 error.contextualize(&name);
@@ -158,30 +194,88 @@ impl Validator {
                 }
                 _ => {}
             }
-            if tld.is_parameterized() || tld.has_constraint_reference() {
+            let specialization =
+                matches!(&tld, ToplevelDefinition::Type(ty) if ty.ty.has_parameter_application());
+            if tld.is_parameterized() || tld.has_constraint_reference() || specialization {
                 if let Err(error) = tld.link_constraint_reference(&scope) {
-                    warn(error);
-                    if tld.is_parameterized() {
-                        continue;
+                    if specialization {
+                        let mut error = LinkerError::from(error);
+                        error.contextualize(&name);
+                        self.specialization_errors.push(error);
+                        failed.insert((module.clone(), name.clone()));
+                    } else {
+                        warn(error);
                     }
                 }
             }
-            if let Err(error) = tld.collect_supertypes(&scope) {
-                warn(error);
-            }
-            if let Err(error) = tld.mark_recursive(&scope) {
-                warn(error);
+            if !failed.contains(&(module.clone(), name.clone())) {
+                if let Err(error) = tld.collect_supertypes(&scope) {
+                    warn(error);
+                }
+                if let Err(error) = tld.mark_recursive(&scope) {
+                    warn(error);
+                }
             }
             if tld.get_module_header().is_some() && visited_headers.insert(module.clone()) {
                 self.fill_in_associated_type_imports(&tld, &scope);
             }
+            let definitions = &mut self.modules.get_mut(&module).unwrap().definitions;
+            if !failed.contains(&(module.clone(), name.clone())) {
+                for generated_type in generated_types.into_inner() {
+                    definitions.insert(
+                        generated_type.name.clone(),
+                        ToplevelDefinition::Type(generated_type),
+                    );
+                }
+            }
+            definitions.insert(name, tld);
+        }
+        while !failed.is_empty() {
+            let dependent: Vec<_> = self
+                .modules
+                .iter()
+                .flat_map(|(module, contents)| {
+                    contents
+                        .definitions
+                        .iter()
+                        .filter_map(|(name, declaration)| {
+                            let ty = match declaration {
+                                ToplevelDefinition::Type(ty) if ty.parameterization.is_none() => {
+                                    &ty.ty
+                                }
+                                ToplevelDefinition::Value(value) => &value.associated_type,
+                                _ => return None,
+                            };
+                            let key = (module.clone(), name.clone());
+                            (!failed.contains(&key)
+                                && ty.references_failed_type(
+                                    &Scope::new(&self.modules, module),
+                                    &failed,
+                                ))
+                            .then_some(key)
+                        })
+                })
+                .collect();
+            if dependent.is_empty() {
+                break;
+            }
+            for (module, name) in dependent {
+                self.specialization_errors.push(LinkerError::new(
+                    Some(name.clone()),
+                    "Depends on a failed parameterized type specialization",
+                    LinkerErrorType::MissingDependency,
+                ));
+                failed.insert((module, name));
+            }
+        }
+        self.filter_template_imports(&failed);
+        for (module, name) in failed {
             self.modules
                 .get_mut(&module)
                 .unwrap()
                 .definitions
-                .insert(name, tld);
+                .remove(&name);
         }
-        self.filter_template_imports();
         Ok((self, warnings))
     }
 
@@ -323,11 +417,22 @@ impl Validator {
     }
 
     pub fn validate(
-        mut self,
+        self,
+        strict_specialization: bool,
     ) -> Result<(Vec<ToplevelDefinition>, Vec<CompilerError>), CompilerError> {
-        let warnings: Vec<CompilerError>;
-        (self, warnings) = self.link()?;
-        Ok(self
+        let (linked, mut warnings) = self.link()?;
+        if strict_specialization {
+            if let Some(error) = linked.specialization_errors.first() {
+                return Err(error.clone().into());
+            }
+        }
+        warnings.extend(
+            linked
+                .specialization_errors
+                .into_iter()
+                .map(CompilerError::from),
+        );
+        Ok(linked
             .modules
             .into_values()
             .flat_map(|module| module.definitions.into_values())

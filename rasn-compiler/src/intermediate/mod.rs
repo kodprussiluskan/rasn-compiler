@@ -649,6 +649,10 @@ impl ToplevelDefinition {
 
     pub(crate) fn apply_tagging_environment(&mut self, environment: &TaggingEnvironment) {
         if let (env, ToplevelDefinition::Type(ty)) = (environment, self) {
+            if ty.parameterization.is_some() {
+                // The governing environment and dummy types are known during specialization.
+                return;
+            }
             ty.tag = ty.tag.as_ref().map(|t| AsnTag {
                 environment: env + &t.environment,
                 tag_class: t.tag_class,
