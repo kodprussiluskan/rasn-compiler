@@ -18,6 +18,7 @@ const COPY_BUILTINS: [&str; 4] = [
 #[derive(Debug, Default)]
 pub(super) struct CopyTypes {
     known: BTreeMap<TypeId, bool>,
+    containing_real: BTreeSet<TypeId>,
     shadowed_builtins: BTreeMap<String, BTreeSet<&'static str>>,
 }
 
@@ -59,10 +60,6 @@ impl Rasn {
 
     pub(super) fn collect_copy_types(&self, modules: &[Vec<ToplevelDefinition>]) -> CopyTypes {
         let mut types = CopyTypes::default();
-        if !self.can_infer_copy() {
-            return types;
-        }
-
         let declarations = modules
             .iter()
             .flatten()
@@ -74,6 +71,26 @@ impl Rasn {
                 Some(((module, ty.name.clone()), ty))
             })
             .collect::<BTreeMap<_, _>>();
+        types.known.extend(declarations.keys().cloned().map(|id| (id, false)));
+        loop {
+            let mut changed = false;
+            for (id, declaration) in &declarations {
+                let header = declaration.module_header.as_ref().unwrap().borrow();
+                if contains_real(&declaration.ty, &|reference| {
+                    resolve(reference, &header, |id| declarations.contains_key(id))
+                        .is_some_and(|id| types.containing_real.contains(&id))
+                }) {
+                    changed |= types.containing_real.insert(id.clone());
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        if !self.can_infer_copy() {
+            return types;
+        }
+        types.known.clear();
         let headers: Vec<_> = modules
             .iter()
             .filter_map(|module| module.first()?.get_module_header())
@@ -199,6 +216,15 @@ impl Rasn {
             })
     }
 
+    pub(super) fn contains_real(&self, ty: &ASN1Type) -> bool {
+        contains_real(ty, &|reference| {
+            self.copy_module.as_ref().is_some_and(|module| {
+                resolve(reference, module, |id| self.copy_types.known.contains_key(id))
+                    .is_some_and(|id| self.copy_types.containing_real.contains(&id))
+            })
+        })
+    }
+
     fn type_is_copy(
         &self,
         ty: &ASN1Type,
@@ -211,7 +237,7 @@ impl Rasn {
             ASN1Type::Null | ASN1Type::Boolean(_) | ASN1Type::Enumerated(_) => true,
             ASN1Type::UTCTime(_) => utc_time,
             ASN1Type::GeneralizedTime(_) => generalized_time,
-            ASN1Type::Real(_) => inline,
+            ASN1Type::Real(real) => inline || Self::real_storage(real).is_ok(),
             ASN1Type::Integer(integer) if inline => self
                 .inline_integer_type(integer)
                 .is_ok_and(|storage| storage != "Integer"),
@@ -247,5 +273,18 @@ impl Rasn {
                 builtins,
                 resolve,
             )
+    }
+}
+
+
+fn contains_real(ty: &ASN1Type, resolve: &impl Fn(&DeclarationElsewhere) -> bool) -> bool {
+    match ty {
+        ASN1Type::Real(_) => true,
+        ASN1Type::ElsewhereDeclaredType(reference) => resolve(reference),
+        ASN1Type::Jer(_, ty) => contains_real(ty, resolve),
+        ASN1Type::SequenceOf(list) | ASN1Type::SetOf(list) => contains_real(&list.element_type, resolve),
+        ASN1Type::Sequence(sequence) | ASN1Type::Set(sequence) => sequence.members.iter().any(|member| contains_real(&member.ty, resolve)),
+        ASN1Type::Choice(choice) => choice.options.iter().any(|option| contains_real(&option.ty, resolve)),
+        _ => false,
     }
 }

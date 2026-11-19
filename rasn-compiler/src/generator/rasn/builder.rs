@@ -80,11 +80,7 @@ impl Rasn {
             ASN1Type::Choice(_) => self.generate_choice(tld),
             ASN1Type::OctetString(_) => self.generate_octet_string(tld),
             ASN1Type::Time(_) => unimplemented!("rasn does not support TIME types yet!"),
-            ASN1Type::Real(_) => Err(GeneratorError {
-                kind: GeneratorErrorType::NotYetInplemented,
-                details: "Real types are currently unsupported!".into(),
-                top_level_declaration: None,
-            }),
+            ASN1Type::Real(_) => self.generate_real(tld),
             ASN1Type::ObjectIdentifier(_) => self.generate_oid(tld),
             ASN1Type::ObjectClassField(_) | ASN1Type::EmbeddedPdv | ASN1Type::External => {
                 self.generate_any(tld)
@@ -100,6 +96,20 @@ impl Rasn {
         }
     }
 
+    fn generate_real(&self, tld: ToplevelTypeDefinition) -> Result<TokenStream, GeneratorError> {
+        let ASN1Type::Real(real) = &tld.ty else {
+            return self.type_mismatch_error(tld, "REAL");
+        };
+        let storage = Self::real_storage(real)?;
+        let (name, annotations) = self.format_name_and_common_annotations(&tld);
+        let comments = self.format_comments(&tld.comments);
+        if tld.tag.is_none() && tld.jer.is_empty() {
+            return Ok(quote!(#comments pub type #name = #storage;));
+        }
+        let annotations = self.join_annotations_with_real(annotations, self.can_derive_copy(&tld.ty), true, true)?;
+        Ok(typealias_template(comments, name, storage, annotations))
+    }
+
     pub(crate) fn generate_typealias(
         &self,
         tld: ToplevelTypeDefinition,
@@ -112,7 +122,7 @@ impl Rasn {
                 self.format_comments(&tld.comments),
                 name,
                 alias,
-                self.join_annotations(annotations, self.can_derive_copy(&tld.ty), true)?,
+                self.join_annotations_with_real(annotations, self.can_derive_copy(&tld.ty), true, self.contains_real(&tld.ty))?,
             ))
         } else {
             self.type_mismatch_error(tld, "type alias")
@@ -661,7 +671,7 @@ impl Rasn {
                 extensible,
                 formatted_options.enum_body,
                 formatted_options.nested_anonymous_types,
-                self.join_annotations(annotations, self.can_derive_copy(&tld.ty), true)?,
+                self.join_annotations_with_real(annotations, self.can_derive_copy(&tld.ty), true, self.contains_real(&tld.ty))?,
             );
             if self.config.generate_from_impls {
                 let mut map = BTreeMap::new();
@@ -792,7 +802,7 @@ impl Rasn {
                     extensible,
                     formatted_members.struct_body,
                     formatted_members.nested_anonymous_types,
-                    self.join_annotations(annotations, self.can_derive_copy(&tld.ty), true)?,
+                    self.join_annotations_with_real(annotations, self.can_derive_copy(&tld.ty), true, self.contains_real(&tld.ty))?,
                     self.format_default_methods(&seq.members, &name.to_string())?,
                     self.format_new_impl(&name, formatted_members.name_types),
                     self.format_default_impl(&tld.name, &seq.members),
@@ -819,27 +829,36 @@ impl Rasn {
             }
         };
         let name = self.to_rust_title_case(&tld.name);
-        let anonymous_item = match seq_or_set_of.element_type.as_ref() {
-            ASN1Type::ElsewhereDeclaredType(_) => None,
-            n => Some(self.generate_type(ToplevelTypeDefinition {
-                jer: Default::default(),
-                parameterization: None,
-                comments: format!(
-                    " Anonymous {} OF member ",
-                    if is_set_of { "SET" } else { "SEQUENCE" }
-                ),
-                name: String::from(INNER_ARRAY_LIKE_PREFIX) + &name.to_string(),
-                ty: n.clone(),
-                tag: None,
-                module_header: None,
-            })?),
+        let element_type = seq_or_set_of.element_type.as_ref();
+        if is_set_of && self.contains_real(element_type) {
+            return Err(GeneratorError {
+                kind: GeneratorErrorType::Unsupported,
+                details: "SET OF elements containing REAL cannot implement Eq and Hash for rasn::types::SetOf".into(),
+                top_level_declaration: Some(Box::new(ToplevelDefinition::Type(tld))),
+            });
         }
-        .unwrap_or_default();
-        let member_type = match seq_or_set_of.element_type.as_ref() {
-            ASN1Type::ElsewhereDeclaredType(d) => {
-                self.to_rust_qualified_type(d.module.as_deref(), &d.identifier)
+        let (anonymous_item, member_type) = match element_type {
+            ASN1Type::Real(real) if !is_set_of && seq_or_set_of.element_tag.is_none() => (
+                TokenStream::new(), Self::real_storage(real)?,
+            ),
+            ASN1Type::ElsewhereDeclaredType(d) => (
+                TokenStream::new(), self.to_rust_qualified_type(d.module.as_deref(), &d.identifier),
+            ),
+            n => {
+                let anonymous_item = self.generate_type(ToplevelTypeDefinition {
+                    jer: Default::default(),
+                    parameterization: None,
+                    comments: format!(
+                        " Anonymous {} OF member ",
+                        if is_set_of { "SET" } else { "SEQUENCE" }
+                    ),
+                    name: String::from(INNER_ARRAY_LIKE_PREFIX) + &name.to_string(),
+                    ty: n.clone(),
+                    tag: if matches!(n, ASN1Type::Real(_)) { seq_or_set_of.element_tag.clone() } else { None },
+                    module_header: None,
+                })?;
+                (anonymous_item, format_ident!("Anonymous{}", &name.to_string()).to_token_stream())
             }
-            _ => format_ident!("Anonymous{}", &name.to_string()).to_token_stream(),
         };
         let mut annotations = vec![
             quote!(delegate),
@@ -856,7 +875,7 @@ impl Rasn {
             name,
             anonymous_item,
             member_type,
-            self.join_annotations(annotations, false, true)?,
+            self.join_annotations_with_real(annotations, false, true, self.contains_real(&tld.ty))?,
         ))
     }
 

@@ -16,7 +16,13 @@ use super::{
 
 pub fn real_value(input: Input<'_>) -> ParserResult<'_, ASN1Value> {
     map(
-        skip_ws_and_comments(alt((realnumber, mbe_notation))),
+        skip_ws_and_comments(alt((
+            realnumber,
+            mbe_notation,
+            map(tag(PLUS_INFINITY), |_| f64::INFINITY),
+            map(tag(MINUS_INFINITY), |_| f64::NEG_INFINITY),
+            map(tag(NOT_A_NUMBER), |_| f64::NAN),
+        ))),
         ASN1Value::Real,
     )
     .parse(input)

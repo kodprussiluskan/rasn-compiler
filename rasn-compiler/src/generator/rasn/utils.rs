@@ -578,6 +578,7 @@ impl Rasn {
                 i.constraints.clone(),
                 self.inline_integer_type(i)?.to_token_stream(),
             ),
+            ASN1Type::Real(real) if !real.constraints.is_empty() => (vec![], Self::real_storage(real)?),
             ASN1Type::Real(_) => (vec![], quote!(f64)),
             ASN1Type::ObjectIdentifier(o) => (o.constraints.clone(), quote!(ObjectIdentifier)),
             ASN1Type::BitString(b) => (b.constraints.clone(), quote!(BitString)),
@@ -612,6 +613,9 @@ impl Rasn {
                 (s.constraints().to_owned(), quote!(SequenceOf<#inner_type>))
             }
             ASN1Type::SetOf(s) => {
+                if self.contains_real(&s.element_type) {
+                    return Err(error!(Unsupported, "SET OF elements containing REAL cannot implement Eq and Hash for rasn::types::SetOf"));
+                }
                 let (_, inner_type) = self.constraints_and_type_name(
                     &s.element_type,
                     name,
@@ -664,8 +668,18 @@ impl Rasn {
         needs_copy: bool,
         is_type_annotation: bool,
     ) -> Result<TokenStream, GeneratorError> {
+        self.join_annotations_with_real(elements, needs_copy, is_type_annotation, false)
+    }
+
+    pub(super) fn join_annotations_with_real(
+        &self,
+        elements: Vec<TokenStream>,
+        needs_copy: bool,
+        is_type_annotation: bool,
+        contains_real: bool,
+    ) -> Result<TokenStream, GeneratorError> {
         let mut not_empty_exprs = elements.into_iter().filter(|ts| !ts.is_empty());
-        let custom_and_required = self.required_annotations(needs_copy)?;
+        let custom_and_required = self.required_annotations(needs_copy, contains_real)?;
         let annotations = if let Some(mut annotations) = not_empty_exprs.next() {
             for elem in not_empty_exprs {
                 annotations.append(Punct::new(',', Spacing::Alone));
@@ -720,6 +734,7 @@ impl Rasn {
             ASN1Type::Null => Ok(quote!(())),
             ASN1Type::Boolean(_) => Ok(quote!(bool)),
             ASN1Type::Integer(i) => Ok(i.int_type().to_token_stream()),
+            ASN1Type::Real(real) if !real.constraints.is_empty() => Self::real_storage(real),
             ASN1Type::Real(_) => Ok(quote!(f64)),
             ASN1Type::BitString(_) => Ok(quote!(BitString)),
             ASN1Type::OctetString(_) => Ok(quote!(OctetString)),
@@ -961,7 +976,8 @@ impl Rasn {
                 ..
             }) => {
                 Self::needs_unnesting(element_type)
-                    || !element_type.constraints().is_empty()
+                    || (!matches!(element_type.as_ref(), ASN1Type::Real(_))
+                        && !element_type.constraints().is_empty())
                     || element_tag.is_some()
             }
             _ => false,
@@ -1342,9 +1358,11 @@ impl Rasn {
         (name, annotations)
     }
 
-    fn required_annotations(&self, needs_copy: bool) -> Result<Vec<TokenStream>, GeneratorError> {
-        let mut required_derives: Vec<_> =
-            self.required_derives.iter().map(String::as_str).collect();
+    fn required_annotations(&self, needs_copy: bool, contains_real: bool) -> Result<Vec<TokenStream>, GeneratorError> {
+        let mut required_derives: Vec<_> = self.required_derives.iter()
+            .map(String::as_str)
+            .filter(|derive| !contains_real || !matches!(*derive, "Eq" | "Hash"))
+            .collect();
         if needs_copy && !required_derives.contains(&Self::COPY_DERIVE) {
             required_derives.push(Self::COPY_DERIVE);
         }
