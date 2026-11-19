@@ -161,12 +161,13 @@ impl Rasn {
     ) -> Result<TokenStream, GeneratorError> {
         if let ASN1Type::Integer(ref int) = tld.ty {
             let (name, mut annotations) = self.format_name_and_common_annotations(&tld);
+            let integer_type = int.int_type();
             annotations.push(self.format_range_annotations(true, &int.constraints)?);
             Ok(integer_template(
                 self.format_comments(&tld.comments),
                 name,
-                self.join_annotations(annotations, false, true)?,
-                int.int_type().to_token_stream(),
+                self.join_annotations(annotations, !integer_type.is_unbounded(), true)?,
+                integer_type.to_token_stream(),
             ))
         } else {
             self.type_mismatch_error(tld, "INTEGER")

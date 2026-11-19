@@ -100,7 +100,7 @@ fn custom_derives_without_any_required() {
         .generated;
     assert!(bindings.contains(
         r#"#[serde(rename = "camelCase")]
-    #[derive(AsnType, Debug, Clone, Decode, Encode, PartialEq, Serialize)]
+    #[derive(AsnType, Debug, Clone, Decode, Encode, PartialEq, Serialize, Copy)]
     #[rasn(delegate, value("4..=8"))]
     pub struct Hello(pub u8);"#
     ))
@@ -130,7 +130,7 @@ fn custom_derives_without_some_required() {
         .generated;
     assert!(bindings.contains(
         r#"#[serde(rename = "camelCase")]
-    #[derive(AsnType, Debug, Clone, Decode, Encode, PartialEq, Serialize)]
+    #[derive(AsnType, Debug, Clone, Decode, Encode, PartialEq, Serialize, Copy)]
     #[rasn(delegate, value("4..=8"))]
     pub struct Hello(pub u8);"#
     ))

@@ -16,7 +16,7 @@ pub mod test_module {
     use rasn::prelude::*;
     use std::sync::LazyLock;
     #[doc = " Anonymous SET OF member "]
-    #[derive(AsnType, Debug, Clone, Decode, Encode, PartialEq, Eq, Hash)]
+    #[derive(AsnType, Debug, Clone, Decode, Encode, PartialEq, Eq, Hash, Copy)]
     #[rasn(delegate, identifier = "INTEGER", value("1..=5"))]
     pub struct AnonymousTicketAgeSet(pub u8);
     #[doc = " Inner type "]

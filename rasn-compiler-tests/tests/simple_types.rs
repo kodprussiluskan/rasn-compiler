@@ -7,6 +7,18 @@ e2e_pdu!(boolean_value, "test-boolean BOOLEAN ::= TRUE");
 
 e2e_pdu!(integer, "Test-Int ::= INTEGER");
 
+#[test]
+fn bounded_integer_wrappers_are_copy() {
+    rasn_compiler_derive::asn1!(
+        "UnsignedInt ::= INTEGER (0..255)
+         SignedInt ::= INTEGER (-128..127)"
+    );
+
+    fn assert_copy<T: Copy>() {}
+    assert_copy::<asn1::UnsignedInt>();
+    assert_copy::<asn1::SignedInt>();
+}
+
 e2e_pdu!(integer_value, "test-int INTEGER ::= 4");
 
 e2e_pdu!(integer_u32_max, "test-int INTEGER ::= 4294967295");

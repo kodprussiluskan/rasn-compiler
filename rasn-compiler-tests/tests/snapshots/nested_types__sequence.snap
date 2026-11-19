@@ -18,7 +18,7 @@ pub mod test_module {
     #[derive(AsnType, Debug, Clone, Decode, Encode, PartialEq, Eq, Hash, Copy)]
     #[rasn(delegate, identifier = "Test-Boolean")]
     pub struct TestBoolean(pub bool);
-    #[derive(AsnType, Debug, Clone, Decode, Encode, PartialEq, Eq, Hash)]
+    #[derive(AsnType, Debug, Clone, Decode, Encode, PartialEq, Eq, Hash, Copy)]
     #[rasn(delegate, identifier = "Test-Int", value("0..=123723"))]
     pub struct TestInt(pub u32);
     #[derive(AsnType, Debug, Clone, Decode, Encode, PartialEq, Eq, Hash)]
