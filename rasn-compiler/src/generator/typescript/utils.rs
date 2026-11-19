@@ -27,7 +27,8 @@ pub fn type_to_tokens(ty: &ASN1Type) -> String {
         | ASN1Type::Time(_)
         | ASN1Type::UTCTime(_)
         | ASN1Type::GeneralizedTime(_)
-        | ASN1Type::ObjectIdentifier(_) => String::from("string"),
+        | ASN1Type::ObjectIdentifier(_)
+        | ASN1Type::RelativeOid(_) => String::from("string"),
         ASN1Type::Enumerated(e) => e
             .members
             .iter()
@@ -164,7 +165,7 @@ pub fn value_to_tokens(value: &ASN1Value) -> Result<String, GeneratorError> {
         }
         ASN1Value::LinkedElsewhereDefinedValue { identifier: e, .. }
         | ASN1Value::ElsewhereDeclaredValue { identifier: e, .. } => Ok(to_jer_identifier(e)),
-        ASN1Value::ObjectIdentifier(oid) => oid
+        ASN1Value::ObjectIdentifier(oid) | ASN1Value::RelativeOid(oid) => oid
             .0
             .iter()
             .try_fold(String::from("\""), |mut acc, arc| {

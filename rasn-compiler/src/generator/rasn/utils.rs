@@ -581,6 +581,7 @@ impl Rasn {
             ASN1Type::Real(real) if !real.constraints.is_empty() => (vec![], Self::real_storage(real)?),
             ASN1Type::Real(_) => (vec![], quote!(f64)),
             ASN1Type::ObjectIdentifier(o) => (o.constraints.clone(), quote!(ObjectIdentifier)),
+            ASN1Type::RelativeOid(o) => (o.constraints.clone(), quote!(RelativeOid)),
             ASN1Type::BitString(b) => (b.constraints.clone(), quote!(BitString)),
             ASN1Type::OctetString(o) => (o.constraints.clone(), quote!(OctetString)),
             ASN1Type::GeneralizedTime(o) => (o.constraints.clone(), quote!(GeneralizedTime)),
@@ -755,6 +756,7 @@ impl Rasn {
                 let inner = self.type_to_tokens(&so.element_type)?;
                 Ok(quote!(SequenceOf<#inner>))
             }
+            ASN1Type::RelativeOid(_) => Ok(quote!(RelativeOid)),
             ASN1Type::ObjectIdentifier(_) => Err(error!(
                 NotYetInplemented,
                 "Object Identifier values are currently unsupported!"
@@ -875,6 +877,18 @@ impl Rasn {
             ASN1Value::LinkedElsewhereDefinedValue { identifier: e, .. }
             | ASN1Value::ElsewhereDeclaredValue { identifier: e, .. } => {
                 Ok(self.to_rust_const_case(e).to_token_stream())
+            }
+            ASN1Value::RelativeOid(oid) => {
+                let arcs = oid
+                    .0
+                    .iter()
+                    .map(|arc| {
+                        arc.number
+                            .and_then(|number| u32::try_from(number).ok())
+                            .ok_or_else(|| error!(Unsupported, "RELATIVE-OID arc is missing or exceeds u32"))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(quote!(RelativeOid::new_unchecked(alloc::borrow::Cow::Borrowed(&[#(#arcs),*]))))
             }
             ASN1Value::ObjectIdentifier(oid) => self.format_oid(oid),
             ASN1Value::Time(t) => match type_name {
@@ -1117,6 +1131,7 @@ impl Rasn {
                 ASN1Type::GeneralizedTime(_) => Ok(quote!(GeneralizedTime)),
                 ASN1Type::UTCTime(_) => Ok(quote!(UtcTime)),
                 ASN1Type::ObjectIdentifier(_) => Ok(quote!(ObjectIdentifier)),
+                ASN1Type::RelativeOid(_) => Ok(quote!(RelativeOid)),
                 ASN1Type::CharacterString(cs) => self.string_type(cs.ty),
                 _ => Ok(self.to_rust_title_case(&ty.as_str())),
             }
@@ -1410,7 +1425,7 @@ fn boxed_type(tokens: TokenStream) -> TokenStream {
 impl ASN1Value {
     pub(crate) fn is_const_type(&self) -> bool {
         match self {
-            ASN1Value::Null | ASN1Value::Boolean(_) | ASN1Value::EnumeratedValue { .. } => true,
+            ASN1Value::Null | ASN1Value::Boolean(_) | ASN1Value::EnumeratedValue { .. } | ASN1Value::RelativeOid(_) => true,
             ASN1Value::Choice { inner_value, .. } => inner_value.is_const_type(),
             ASN1Value::LinkedIntValue { integer_type, .. } => {
                 integer_type != &IntegerType::Unbounded
@@ -1425,7 +1440,7 @@ impl ASN1Value {
 impl ASN1Type {
     pub(crate) fn is_const_type(&self) -> bool {
         match self {
-            ASN1Type::Null | ASN1Type::Enumerated(_) | ASN1Type::Boolean(_) => true,
+            ASN1Type::Null | ASN1Type::Enumerated(_) | ASN1Type::Boolean(_) | ASN1Type::RelativeOid(_) => true,
             ASN1Type::Integer(i) => {
                 i.constraints.iter().fold(IntegerType::Unbounded, |acc, c| {
                     acc.max_restrictive(c.integer_constraints())

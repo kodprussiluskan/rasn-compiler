@@ -5,6 +5,7 @@ use super::Scope;
 
 mod constraints;
 mod information_object;
+mod relative_oid;
 mod types;
 mod utils;
 
@@ -761,7 +762,9 @@ impl ASN1Type {
         match self {
             ASN1Type::Null => false,
             ASN1Type::Boolean(b) => b.constraints.iter().any(|c| c.has_cross_reference()),
-            ASN1Type::ObjectIdentifier(o) => o.constraints.iter().any(|c| c.has_cross_reference()),
+            ASN1Type::ObjectIdentifier(o) | ASN1Type::RelativeOid(o) => {
+                o.constraints.iter().any(|c| c.has_cross_reference())
+            }
             ASN1Type::Integer(i) => i.constraints.iter().any(|c| c.has_cross_reference()),
             ASN1Type::BitString(b) => b.constraints.iter().any(|c| c.has_cross_reference()),
             ASN1Type::OctetString(o) => o.constraints.iter().any(|c| c.has_cross_reference()),
@@ -1151,6 +1154,13 @@ impl ASN1Value {
                     self.link_with_type(tlds, ty, type_name)?;
                 }
                 Ok(())
+            }
+            (ASN1Type::RelativeOid(_), ASN1Value::ObjectIdentifier(oid)) => {
+                *self = ASN1Value::RelativeOid(relative_oid::resolve(oid, &tlds.value_scope())?);
+                Ok(())
+            }
+            (ASN1Type::RelativeOid(_), ASN1Value::LinkedNestedValue { value, .. }) => {
+                value.link_with_type(tlds, ty, type_name)
             }
             (
                 ASN1Type::BitString(BitString {

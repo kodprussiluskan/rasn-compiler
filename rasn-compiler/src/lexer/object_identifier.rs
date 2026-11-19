@@ -13,7 +13,7 @@ use nom::{
     character::complete::u128,
     combinator::{into, map, opt},
     multi::many1,
-    sequence::{pair, preceded},
+    sequence::pair,
     Parser,
 };
 
@@ -64,12 +64,17 @@ pub fn object_identifier_value(input: Input<'_>) -> ParserResult<'_, ObjectIdent
 /// ```
 pub fn object_identifier(input: Input<'_>) -> ParserResult<'_, ASN1Type> {
     map(
-        into(preceded(
-            // TODO: store info whether the object id is relative
+        pair(
             skip_ws_and_comments(alt((tag(OBJECT_IDENTIFIER), tag(RELATIVE_OID)))),
             opt(skip_ws_and_comments(constraints)),
-        )),
-        ASN1Type::ObjectIdentifier,
+        ),
+        |(kind, constraints)| {
+            if kind.inner() == RELATIVE_OID {
+                ASN1Type::RelativeOid(constraints.into())
+            } else {
+                ASN1Type::ObjectIdentifier(constraints.into())
+            }
+        },
     )
     .parse(input)
 }

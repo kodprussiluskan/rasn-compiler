@@ -172,6 +172,7 @@ impl Backend for Typescript {
                     }
                     ASN1Type::OctetString(_) => self.generate_octet_string(t),
                     ASN1Type::ObjectIdentifier(_)
+                    | ASN1Type::RelativeOid(_)
                     | ASN1Type::GeneralizedTime(_)
                     | ASN1Type::CharacterString(_)
                     | ASN1Type::UTCTime(_) => self.generate_string_like(t),

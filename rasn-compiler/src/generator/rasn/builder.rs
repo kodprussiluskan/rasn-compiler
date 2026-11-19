@@ -81,7 +81,7 @@ impl Rasn {
             ASN1Type::OctetString(_) => self.generate_octet_string(tld),
             ASN1Type::Time(_) => unimplemented!("rasn does not support TIME types yet!"),
             ASN1Type::Real(_) => self.generate_real(tld),
-            ASN1Type::ObjectIdentifier(_) => self.generate_oid(tld),
+            ASN1Type::ObjectIdentifier(_) | ASN1Type::RelativeOid(_) => self.generate_oid(tld),
             ASN1Type::ObjectClassField(_) | ASN1Type::EmbeddedPdv | ASN1Type::External => {
                 self.generate_any(tld)
             }
@@ -434,6 +434,16 @@ impl Rasn {
                     )
                 }
             }
+            ASN1Value::RelativeOid(_) => {
+                let ty_tokens = self.type_to_tokens(ty)?;
+                let value = self.value_to_tokens(&tld.value, None)?;
+                let value = if ty.is_builtin_type() {
+                    value
+                } else {
+                    quote!(#ty_tokens(#value))
+                };
+                call_template!(self, primitive_value_template, tld, ty_tokens, value)
+            }
             ASN1Value::ObjectIdentifier(_) if ty.is_builtin_type() => call_template!(
                 self,
                 lazy_static_value_template,
@@ -547,17 +557,19 @@ impl Rasn {
         &self,
         tld: ToplevelTypeDefinition,
     ) -> Result<TokenStream, GeneratorError> {
-        if let ASN1Type::ObjectIdentifier(oid) = &tld.ty {
-            let (name, mut annotations) = self.format_name_and_common_annotations(&tld);
-            annotations.push(self.format_range_annotations(false, &oid.constraints)?);
-            Ok(oid_template(
-                self.format_comments(&tld.comments),
-                name,
-                self.join_annotations(annotations, false, true)?,
-            ))
-        } else {
-            self.type_mismatch_error(tld, "OBJECT IDENTIFIER")
-        }
+        let (oid, storage) = match &tld.ty {
+            ASN1Type::ObjectIdentifier(oid) => (oid, quote!(ObjectIdentifier)),
+            ASN1Type::RelativeOid(oid) => (oid, quote!(RelativeOid)),
+            _ => return self.type_mismatch_error(tld, "OBJECT IDENTIFIER or RELATIVE-OID"),
+        };
+        let (name, mut annotations) = self.format_name_and_common_annotations(&tld);
+        annotations.push(self.format_range_annotations(false, &oid.constraints)?);
+        Ok(typealias_template(
+            self.format_comments(&tld.comments),
+            name,
+            storage,
+            self.join_annotations(annotations, false, true)?,
+        ))
     }
 
     pub(crate) fn generate_null(

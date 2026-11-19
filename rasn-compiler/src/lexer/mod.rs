@@ -297,7 +297,7 @@ fn top_level_information_object_declaration(
         skip_ws(many0(comment)),
         skip_ws(context_boundary(identifier)),
         skip_ws(opt(parameterization)),
-        skip_ws(uppercase_identifier),
+        skip_ws(nom::combinator::verify(uppercase_identifier, |name: &str| name != RELATIVE_OID)),
         preceded(assignment, information_object),
     ))
     .parse(input)
@@ -310,7 +310,7 @@ fn top_level_object_set_declaration(
         skip_ws(many0(comment)),
         skip_ws(context_boundary(identifier)),
         skip_ws(opt(parameterization)),
-        skip_ws(uppercase_identifier),
+        skip_ws(nom::combinator::verify(uppercase_identifier, |name: &str| name != RELATIVE_OID)),
         preceded(assignment, object_set),
     ))
     .parse(input)

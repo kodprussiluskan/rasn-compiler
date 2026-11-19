@@ -847,6 +847,7 @@ pub enum ASN1Type {
     ElsewhereDeclaredType(DeclarationElsewhere),
     ChoiceSelectionType(ChoiceSelectionType),
     ObjectIdentifier(ObjectIdentifier),
+    RelativeOid(ObjectIdentifier),
     ObjectClassField(ObjectClassFieldType),
     EmbeddedPdv,
     External,
@@ -921,6 +922,7 @@ impl ASN1Type {
             }
             ASN1Type::ChoiceSelectionType(_) => todo!(),
             ASN1Type::ObjectIdentifier(_) => Cow::Borrowed(OBJECT_IDENTIFIER),
+            ASN1Type::RelativeOid(_) => Cow::Borrowed(RELATIVE_OID),
             ASN1Type::ObjectClassField(ifr) => Cow::Owned(format!(
                 "{INTERNAL_IO_FIELD_REF_TYPE_NAME_PREFIX}{}${}",
                 ifr.class,
@@ -958,7 +960,7 @@ impl ASN1Type {
             ASN1Type::ObjectClassField(f) => f.constraints(),
             ASN1Type::GeneralizedTime(g) => g.constraints(),
             ASN1Type::UTCTime(u) => u.constraints(),
-            ASN1Type::ObjectIdentifier(o) => o.constraints(),
+            ASN1Type::ObjectIdentifier(o) | ASN1Type::RelativeOid(o) => o.constraints(),
             ASN1Type::ChoiceSelectionType(_)
             | ASN1Type::Null
             | ASN1Type::Any
@@ -985,7 +987,7 @@ impl ASN1Type {
             ASN1Type::ObjectClassField(f) => Some(f.constraints_mut()),
             ASN1Type::GeneralizedTime(g) => Some(g.constraints_mut()),
             ASN1Type::UTCTime(u) => Some(u.constraints_mut()),
-            ASN1Type::ObjectIdentifier(o) => Some(o.constraints_mut()),
+            ASN1Type::ObjectIdentifier(o) | ASN1Type::RelativeOid(o) => Some(o.constraints_mut()),
             ASN1Type::ChoiceSelectionType(_)
             | ASN1Type::Null
             | ASN1Type::Any
@@ -1135,6 +1137,7 @@ pub enum ASN1Value {
         identifier: String,
     },
     ObjectIdentifier(ObjectIdentifierValue),
+    RelativeOid(ObjectIdentifierValue),
     /// In ASN1 value declarations, the value type is not straighforward to parse.
     /// For example, in the following ASN1
     /// ```ignore

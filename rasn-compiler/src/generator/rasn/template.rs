@@ -211,18 +211,6 @@ pub fn any_template(
     }
 }
 
-pub fn oid_template(
-    comments: TokenStream,
-    name: TokenStream,
-    annotations: TokenStream,
-) -> TokenStream {
-    quote! {
-        #comments
-        #annotations
-        pub struct #name(pub ObjectIdentifier);
-    }
-}
-
 pub fn enumerated_template(
     comments: TokenStream,
     name: TokenStream,
