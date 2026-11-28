@@ -83,6 +83,9 @@ impl Rasn {
         loop {
             let mut changed = false;
             for (id, declaration) in declarations {
+                if self.hashable_reals && matches!(declaration.ty, ASN1Type::Real(_)) {
+                    continue;
+                }
                 let header = declaration.module_header.as_ref().unwrap().borrow();
                 if contains_real(&declaration.ty, &|reference| {
                     resolve(reference, &header, |id| declarations.contains_key(id))

@@ -36,6 +36,7 @@ impl Rasn {
                 return None;
             }
             let wraps = !matches!(declaration.ty, ASN1Type::Real(_))
+                || self.hashable_reals
                 || declaration.tag.is_some()
                 || !declaration.jer.is_empty();
             if wraps {

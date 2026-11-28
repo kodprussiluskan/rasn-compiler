@@ -683,8 +683,20 @@ impl Rasn {
         is_type_annotation: bool,
         contains_real: bool,
     ) -> Result<TokenStream, GeneratorError> {
+        let omitted: &[&str] = if contains_real { &["Eq", "Hash"] } else { &[] };
+        self.join_annotations_omitting(elements, needs_copy, is_type_annotation, omitted)
+    }
+
+    /// Like `join_annotations_with_real`, leaving the `omitted` derives out of the required ones.
+    pub(super) fn join_annotations_omitting(
+        &self,
+        elements: Vec<TokenStream>,
+        needs_copy: bool,
+        is_type_annotation: bool,
+        omitted: &[&str],
+    ) -> Result<TokenStream, GeneratorError> {
         let mut not_empty_exprs = elements.into_iter().filter(|ts| !ts.is_empty());
-        let custom_and_required = self.required_annotations(needs_copy, contains_real)?;
+        let custom_and_required = self.required_annotations(needs_copy, omitted)?;
         let annotations = if let Some(mut annotations) = not_empty_exprs.next() {
             for elem in not_empty_exprs {
                 annotations.append(Punct::new(',', Spacing::Alone));
@@ -1336,6 +1348,9 @@ impl Rasn {
     }
 
     pub(crate) fn to_rust_enum_identifier(&self, input: &str) -> Ident {
+        if self.upper_camel_case_variants {
+            return format_ident!("{}", self.to_rust_title_case(input).to_string());
+        }
         let mut formatted = format_ident!("{}", input.replace('-', "_"));
         if Self::RUST_KEYWORDS.contains(&input) {
             formatted = format_ident!("R_{formatted}");
@@ -1428,10 +1443,10 @@ impl Rasn {
         (name, annotations)
     }
 
-    fn required_annotations(&self, needs_copy: bool, contains_real: bool) -> Result<Vec<TokenStream>, GeneratorError> {
+    fn required_annotations(&self, needs_copy: bool, omitted: &[&str]) -> Result<Vec<TokenStream>, GeneratorError> {
         let mut required_derives: Vec<_> = self.required_derives.iter()
             .map(String::as_str)
-            .filter(|derive| !contains_real || !matches!(*derive, "Eq" | "Hash"))
+            .filter(|derive| !omitted.contains(derive))
             .collect();
         if needs_copy && !required_derives.contains(&Self::COPY_DERIVE) {
             required_derives.push(Self::COPY_DERIVE);

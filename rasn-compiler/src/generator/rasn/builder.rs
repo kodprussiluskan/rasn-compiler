@@ -104,6 +104,15 @@ impl Rasn {
         let storage = Self::real_storage(real)?;
         let (name, annotations) = self.format_name_and_common_annotations(&tld);
         let comments = self.format_comments(&tld.comments);
+        if self.hashable_reals {
+            let annotations = self.join_annotations_omitting(
+                annotations,
+                self.can_derive_copy(&tld.ty),
+                true,
+                &["PartialEq", "Eq", "Hash"],
+            )?;
+            return Ok(hashable_real_template(comments, name, storage, annotations));
+        }
         if tld.tag.is_none() && tld.jer.is_empty() {
             return Ok(quote!(#comments pub type #name = #storage;));
         }

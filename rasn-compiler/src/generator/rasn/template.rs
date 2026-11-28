@@ -14,6 +14,44 @@ pub fn typealias_template(
     }
 }
 
+/// A REAL newtype whose equality and hash treat every NaN alike and `-0.0` like `0.0`, so it can
+/// implement `Eq` and `Hash`. It is `repr(transparent)`, so a slice of it can be viewed as a slice
+/// of its float.
+pub fn hashable_real_template(
+    comments: TokenStream,
+    name: TokenStream,
+    storage: TokenStream,
+    annotations: TokenStream,
+) -> TokenStream {
+    quote! {
+        #comments
+        #annotations
+        #[repr(transparent)]
+        pub struct #name (pub #storage);
+
+        impl core::cmp::PartialEq for #name {
+            fn eq(&self, other: &Self) -> bool {
+                self.0 == other.0 || (self.0.is_nan() && other.0.is_nan())
+            }
+        }
+
+        impl core::cmp::Eq for #name {}
+
+        impl core::hash::Hash for #name {
+            fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+                let value = if self.0.is_nan() {
+                    #storage::NAN
+                } else if self.0 == 0.0 {
+                    0.0
+                } else {
+                    self.0
+                };
+                value.to_bits().hash(state);
+            }
+        }
+    }
+}
+
 pub fn integer_value_template(
     comments: TokenStream,
     name: Ident,

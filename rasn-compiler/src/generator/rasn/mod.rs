@@ -43,6 +43,8 @@ pub struct Rasn {
     copy_types: copy::CopyTypes,
     copy_module: Option<ModuleHeader>,
     fixed_size_arrays: bool,
+    upper_camel_case_variants: bool,
+    hashable_reals: bool,
     collection_layout: Option<storage::CollectionLayout>,
     collection_owner: std::cell::RefCell<Option<String>>,
     value_types: BTreeMap<(String, String), ToplevelTypeDefinition>,
@@ -167,6 +169,8 @@ impl Backend for Rasn {
             copy_types: copy::CopyTypes::default(),
             copy_module: None,
             fixed_size_arrays: false,
+            upper_camel_case_variants: false,
+            hashable_reals: false,
             collection_layout: None,
             collection_owner: std::cell::RefCell::default(),
             value_types: BTreeMap::new(),
@@ -287,6 +291,51 @@ impl Rasn {
     /// ```
     pub fn with_fixed_size_arrays(mut self, enabled: bool) -> Self {
         self.fixed_size_arrays = enabled;
+        self
+    }
+
+    /// Name ENUMERATED items and CHOICE alternatives in Rust's UpperCamelCase (`installation-read`
+    /// becomes `InstallationRead`) instead of the default, which only replaces `-` with `_`.
+    /// Encodings are unchanged: a renamed variant keeps its ASN.1 name in `#[rasn(identifier)]`.
+    ///
+    /// ```
+    /// use rasn_compiler::prelude::{Compiler, RasnBackend};
+    ///
+    /// let result = Compiler::<RasnBackend, _>::new()
+    ///     .with_backend(RasnBackend::default().with_upper_camel_case_variants(true))
+    ///     .add_asn_literal("Example DEFINITIONS ::= BEGIN Kind ::= ENUMERATED { read-only, write } END")
+    ///     .compile_to_string()
+    ///     .unwrap();
+    /// assert!(result.generated.contains("ReadOnly"));
+    /// ```
+    pub fn with_upper_camel_case_variants(mut self, enabled: bool) -> Self {
+        self.upper_camel_case_variants = enabled;
+        self
+    }
+
+    /// Generate every top-level REAL type as a newtype over its `f32` or `f64` with `Eq` and
+    /// `Hash`, instead of a plain type alias. Values compare as numbers, except that NaN equals
+    /// NaN, and hash consistently with that (`-0.0` like `0.0`, every NaN alike). Types holding
+    /// these REALs then derive `Eq` and `Hash` too and can be elements of a SET OF. A REAL
+    /// written inline in another type stays a plain float. Encodings are unchanged: the newtype
+    /// is `#[rasn(delegate)]`, and `#[repr(transparent)]` over its float.
+    ///
+    /// ```
+    /// use rasn_compiler::prelude::{Compiler, RasnBackend};
+    ///
+    /// let result = Compiler::<RasnBackend, _>::new()
+    ///     .with_backend(RasnBackend::default().with_hashable_reals(true))
+    ///     .add_asn_literal(
+    ///         "Example DEFINITIONS ::= BEGIN
+    ///          Float32 ::= REAL (WITH COMPONENTS { mantissa (-16777215..16777215), base (2), exponent (-149..104) })
+    ///          END",
+    ///     )
+    ///     .compile_to_string()
+    ///     .unwrap();
+    /// assert!(result.generated.contains("pub struct Float32(pub f32)"));
+    /// ```
+    pub fn with_hashable_reals(mut self, enabled: bool) -> Self {
+        self.hashable_reals = enabled;
         self
     }
 
